@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { supabase } from './supabaseClient';
 import {
   LayoutDashboard, Users, ClipboardList, CalendarDays, Plus, Trash2,
   Pencil, Check, X, AlertTriangle, ChevronLeft, ChevronRight, Loader2,
-  ChevronDown, Save, ListChecks, Package
+  ChevronDown, Save, ListChecks, Package, FileText
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell
@@ -116,26 +117,59 @@ function rowToActivity(row) {
   };
 }
 
+// Shared data (shared=true) is backed by a single Supabase table, `kv_store`,
+// that mirrors the original window.storage model: one row per key, JSON value.
+// Personal/per-device data (shared=false — just the remembered login and the
+// last-viewed project) stays in localStorage rather than needing a real user
+// auth system, since it's a device convenience, not data that needs to sync
+// across devices or be visible to teammates.
 async function safeGet(key, shared = true) {
+  if (!shared) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw === null ? null : JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
   try {
-    const r = await window.storage.get(key, shared);
-    return r ? JSON.parse(r.value) : null;
+    const { data, error } = await supabase.from('kv_store').select('value').eq('key', key).maybeSingle();
+    if (error || !data) return null;
+    return data.value;
   } catch (e) {
     return null;
   }
 }
 async function safeSet(key, value, shared = true) {
+  if (!shared) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
   try {
-    await window.storage.set(key, JSON.stringify(value), shared);
-    return true;
+    const { error } = await supabase
+      .from('kv_store')
+      .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+    return !error;
   } catch (e) {
     return false;
   }
 }
 async function safeDelete(key, shared = true) {
+  if (!shared) {
+    try {
+      localStorage.removeItem(key);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
   try {
-    await window.storage.delete(key, shared);
-    return true;
+    const { error } = await supabase.from('kv_store').delete().eq('key', key);
+    return !error;
   } catch (e) {
     return false;
   }
@@ -144,6 +178,7 @@ async function safeDelete(key, shared = true) {
 const PROJECT_DATA_KEYS = [
   'trades-config', 'areas-config', 'manpower-entries', 'activities', 'daily-log-entries',
   'daily-log-subactivities', 'procurement-items', 'procurement-lots', 'procurement-updates',
+  'mom-records',
 ];
 
 function Badge({ label, color }) {
@@ -243,6 +278,7 @@ export default function App() {
   const [procItems, setProcItems] = useState([]);
   const [procLots, setProcLots] = useState([]);
   const [procUpdates, setProcUpdates] = useState([]);
+  const [momRecords, setMomRecords] = useState([]);
 
   const activeProject = projects.find(p => p.id === activeProjectId) || null;
 
@@ -311,7 +347,7 @@ export default function App() {
     (async () => {
       setDataLoading(true);
       const suf = activeProjectId;
-      const [tr, ar, mp, act, dl, dsa, pi, pl, pu] = await Promise.all([
+      const [tr, ar, mp, act, dl, dsa, pi, pl, pu, mr] = await Promise.all([
         safeGet(`trades-config:${suf}`),
         safeGet(`areas-config:${suf}`),
         safeGet(`manpower-entries:${suf}`),
@@ -321,6 +357,7 @@ export default function App() {
         safeGet(`procurement-items:${suf}`),
         safeGet(`procurement-lots:${suf}`),
         safeGet(`procurement-updates:${suf}`),
+        safeGet(`mom-records:${suf}`),
       ]);
       setTrades(tr || DEFAULT_TRADES);
       let resolvedAreas = ar;
@@ -337,6 +374,7 @@ export default function App() {
       setProcItems(pi || []);
       setProcLots(pl || []);
       setProcUpdates(pu || []);
+      setMomRecords(mr || []);
       setDataLoading(false);
     })();
   }, [activeProjectId]);
@@ -374,6 +412,12 @@ export default function App() {
   const deleteActiveProject = async () => {
     if (!activeProjectId) return;
     const remaining = projects.filter(p => p.id !== activeProjectId);
+    const momList = await safeGet(`mom-records:${activeProjectId}`, true);
+    if (momList) {
+      for (const rec of momList) {
+        await safeDelete(`mom-file:${activeProjectId}:${rec.id}`, true);
+      }
+    }
     for (const k of PROJECT_DATA_KEYS) {
       await safeDelete(`${k}:${activeProjectId}`, true);
     }
@@ -422,6 +466,10 @@ export default function App() {
   const saveProcUpdates = (list) => {
     setProcUpdates(list);
     persist(`procurement-updates:${activeProjectId}`, list);
+  };
+  const saveMomRecords = (list) => {
+    setMomRecords(list);
+    persist(`mom-records:${activeProjectId}`, list);
   };
 
   // Keep each activity's Balance Scope in sync with cumulative Actual Qty logged against it
@@ -574,6 +622,7 @@ export default function App() {
           { id: 'activities', label: 'Activities', icon: ClipboardList },
           { id: 'dailylog', label: 'Daily Log', icon: ListChecks },
           { id: 'procurement', label: 'Procurement', icon: Package },
+          { id: 'mom', label: 'MOM / Notes', icon: FileText },
           { id: 'timeline', label: 'Timeline', icon: CalendarDays },
         ].map(t => {
           const Icon = t.icon;
@@ -626,6 +675,9 @@ export default function App() {
             lots={procLots} saveLots={saveProcLots}
             updates={procUpdates} saveUpdates={saveProcUpdates}
           />
+        )}
+        {view === 'mom' && (
+          <MOMPage records={momRecords} saveRecords={saveMomRecords} projectId={activeProjectId} />
         )}
         {view === 'timeline' && (
           <TimelinePage activities={activities} procItems={procItems} procLots={procLots} />
@@ -2019,6 +2071,329 @@ function ProcurementPage({ trades, items, saveItems, lots, saveLots, updates, sa
               </div>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- MOM / Record Notes ---------------- */
+const MOM_MAX_CHARS = 4_800_000; // safety margin under the 5MB per-key storage cap
+
+function fileToDataUri(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+function dataUriToArrayBuffer(dataUri) {
+  const base64 = dataUri.split(',')[1] || '';
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+function fmtKB(kb) {
+  if (kb >= 1024) return `${(kb / 1024).toFixed(1)} MB`;
+  return `${kb} KB`;
+}
+function momFileType(fileName) {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith('.pdf')) return 'pdf';
+  if (lower.endsWith('.docx')) return 'docx';
+  if (lower.endsWith('.doc')) return 'doc';
+  return 'other';
+}
+
+function MOMPreviewBody({ entry, fileName }) {
+  if (!entry || entry.status === 'loading') {
+    return <div className="flex items-center justify-center py-10"><Loader2 size={18} className="animate-spin" style={{ color: '#3D6178' }} /></div>;
+  }
+  if (entry.status === 'error') {
+    return <p className="text-xs p-3" style={{ color: '#B5482F' }}>Couldn't load this file.</p>;
+  }
+  if (entry.status === 'unsupported' || entry.type === 'doc') {
+    return (
+      <div className="p-3 space-y-2">
+        <p className="text-xs" style={{ color: '#8B8578' }}>
+          Legacy .doc files can't be previewed in-browser — only .pdf and .docx are supported. You can still download it below.
+        </p>
+        {entry.dataUri && <a href={entry.dataUri} download={fileName} className="text-xs underline" style={{ color: '#3D6178' }}>Download {fileName}</a>}
+      </div>
+    );
+  }
+  if (entry.type === 'pdf') {
+    return (
+      <div>
+        <iframe src={entry.dataUri} title={fileName} style={{ width: '100%', height: 480, border: '1px solid #D9D2C2' }} />
+        <a href={entry.dataUri} download={fileName} className="text-xs underline block mt-2" style={{ color: '#3D6178' }}>Download {fileName}</a>
+      </div>
+    );
+  }
+  if (entry.type === 'docx') {
+    return (
+      <div>
+        <div
+          className="text-xs p-3 rounded-sm border"
+          style={{ maxHeight: 480, overflow: 'auto', borderColor: '#D9D2C2', backgroundColor: 'white' }}
+          dangerouslySetInnerHTML={{ __html: entry.html }}
+        />
+        <a href={entry.dataUri} download={fileName} className="text-xs underline block mt-2" style={{ color: '#3D6178' }}>Download {fileName}</a>
+      </div>
+    );
+  }
+  return null;
+}
+
+function MOMPage({ records, saveRecords, projectId }) {
+  const [showForm, setShowForm] = useState(false);
+  const [description, setDescription] = useState('');
+  const [meetingDate, setMeetingDate] = useState(todayStr());
+  const [pendingFile, setPendingFile] = useState(null);
+  const [fileError, setFileError] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [expandedId, setExpandedId] = useState(null);
+  const [compareSelected, setCompareSelected] = useState([]);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [previewCache, setPreviewCache] = useState({});
+  const fileInputRef = useRef(null);
+
+  const resetForm = () => {
+    setDescription(''); setMeetingDate(todayStr()); setPendingFile(null); setFileError('');
+    setShowForm(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setFileError('');
+    const type = momFileType(file.name);
+    if (type !== 'pdf' && type !== 'docx' && type !== 'doc') {
+      setFileError('Only .pdf, .docx, or .doc files are supported.');
+      setPendingFile(null);
+      return;
+    }
+    try {
+      const dataUri = await fileToDataUri(file);
+      if (dataUri.length > MOM_MAX_CHARS) {
+        setFileError(`This file is too large to store (~${fmtKB(Math.round(file.size / 1024))}). Keep files under roughly 3.5 MB.`);
+        setPendingFile(null);
+        return;
+      }
+      setPendingFile({ fileName: file.name, fileType: type, dataUri, sizeKB: Math.round(file.size / 1024) });
+    } catch (err) {
+      setFileError('Could not read that file.');
+    }
+  };
+
+  const loadPreview = async (record) => {
+    setPreviewCache(prev => ({ ...prev, [record.id]: { status: 'loading' } }));
+    try {
+      const stored = await safeGet(`mom-file:${projectId}:${record.id}`, true);
+      if (!stored) throw new Error('missing');
+      if (record.fileType === 'pdf') {
+        setPreviewCache(prev => ({ ...prev, [record.id]: { status: 'ready', type: 'pdf', dataUri: stored } }));
+      } else if (record.fileType === 'docx') {
+        const mammoth = await import('mammoth');
+        const arrayBuffer = dataUriToArrayBuffer(stored);
+        const result = await mammoth.convertToHtml({ arrayBuffer });
+        setPreviewCache(prev => ({ ...prev, [record.id]: { status: 'ready', type: 'docx', html: result.value, dataUri: stored } }));
+      } else {
+        setPreviewCache(prev => ({ ...prev, [record.id]: { status: 'unsupported', type: record.fileType, dataUri: stored } }));
+      }
+    } catch (err) {
+      setPreviewCache(prev => ({ ...prev, [record.id]: { status: 'error' } }));
+    }
+  };
+
+  const togglePreview = (record) => {
+    if (expandedId === record.id) { setExpandedId(null); return; }
+    setExpandedId(record.id);
+    if (!previewCache[record.id]) loadPreview(record);
+  };
+
+  const toggleCompare = (id) => {
+    setCompareSelected(prev => {
+      if (prev.includes(id)) return prev.filter(x => x !== id);
+      if (prev.length >= 2) return prev;
+      return [...prev, id];
+    });
+  };
+
+  const openCompare = () => {
+    setCompareOpen(true);
+    compareSelected.forEach(id => {
+      const rec = records.find(r => r.id === id);
+      if (rec && !previewCache[id]) loadPreview(rec);
+    });
+  };
+
+  const handleSubmit = async () => {
+    if (!description.trim() || !pendingFile) return;
+    setUploading(true);
+    const id = uid();
+    const ok = await safeSet(`mom-file:${projectId}:${id}`, pendingFile.dataUri, true);
+    setUploading(false);
+    if (!ok) { setFileError('Could not save the file — try again.'); return; }
+    const meta = {
+      id, description: description.trim(), meetingDate,
+      fileName: pendingFile.fileName, fileType: pendingFile.fileType, sizeKB: pendingFile.sizeKB,
+      createdAt: new Date().toISOString(),
+    };
+    saveRecords([...records, meta]);
+    resetForm();
+  };
+
+  const removeRecord = async (record) => {
+    await safeDelete(`mom-file:${projectId}:${record.id}`, true);
+    saveRecords(records.filter(r => r.id !== record.id));
+    setCompareSelected(prev => prev.filter(id => id !== record.id));
+    if (expandedId === record.id) setExpandedId(null);
+    setPreviewCache(prev => { const next = { ...prev }; delete next[record.id]; return next; });
+  };
+
+  const sorted = useMemo(() => [...records].sort((a, b) => (a.meetingDate < b.meetingDate ? 1 : -1)), [records]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h2 className="text-lg font-semibold" style={{ fontFamily: "'Barlow Condensed', sans-serif" }}>MOM / Record notes</h2>
+        <div className="flex gap-2">
+          {compareSelected.length === 2 && (
+            <button
+              onClick={openCompare}
+              className="flex items-center gap-1.5 text-white px-3 py-1.5 rounded-sm text-sm"
+              style={{ backgroundColor: '#3D6178' }}
+            >
+              Compare selected
+            </button>
+          )}
+          <button
+            onClick={() => { resetForm(); setShowForm(true); }}
+            className="flex items-center gap-1.5 text-white px-3 py-1.5 rounded-sm text-sm"
+            style={{ backgroundColor: '#D98E2B' }}
+          >
+            <Plus size={14} /> Add record
+          </button>
+        </div>
+      </div>
+
+      <p className="text-xs" style={{ color: '#8B8578' }}>
+        Supports .pdf and .docx (previewable in-browser) and .doc (download only). Each file is capped at roughly 3.5 MB.
+        Select up to two records with the checkboxes to compare them side by side.
+      </p>
+
+      {showForm && (
+        <div className="bg-white border rounded-sm p-4 space-y-3" style={{ borderColor: '#D9D2C2' }}>
+          <h3 className="text-sm font-semibold" style={{ color: '#4A453C' }}>New record</h3>
+          <input
+            placeholder="Meeting description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className="w-full border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }}
+          />
+          <div>
+            <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Date of meeting</label>
+            <input
+              type="date" value={meetingDate}
+              onChange={(e) => setMeetingDate(e.target.value)}
+              className="w-full border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }}
+            />
+          </div>
+          <div>
+            <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>File (.pdf, .docx, .doc)</label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.docx,.doc"
+              onChange={handleFileChange}
+              className="w-full text-sm"
+            />
+            {pendingFile && !fileError && (
+              <p className="text-xs mt-1" style={{ color: '#4F7C52' }}>{pendingFile.fileName} · {fmtKB(pendingFile.sizeKB)} ready to save</p>
+            )}
+            {fileError && <p className="text-xs mt-1" style={{ color: '#B5482F' }}>{fileError}</p>}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleSubmit}
+              disabled={!description.trim() || !pendingFile || uploading}
+              className="flex items-center gap-1.5 text-white px-3 py-1.5 rounded-sm text-sm"
+              style={{ backgroundColor: (!description.trim() || !pendingFile || uploading) ? '#B7ADA0' : '#1C2733' }}
+            >
+              {uploading ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} {uploading ? 'Saving...' : 'Add record'}
+            </button>
+            <button onClick={resetForm} className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-sm border" style={{ color: '#4A453C', borderColor: '#D9D2C2' }}>
+              <X size={14} /> Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {compareOpen && compareSelected.length === 2 && (
+        <div className="bg-white border rounded-sm p-3" style={{ borderColor: '#3D6178' }}>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold" style={{ color: '#4A453C' }}>Comparing 2 records</h3>
+            <X size={16} className="cursor-pointer" style={{ color: '#8B8578' }} onClick={() => setCompareOpen(false)} />
+          </div>
+          <div className="flex flex-col md:flex-row gap-3">
+            {compareSelected.map(id => {
+              const rec = records.find(r => r.id === id);
+              if (!rec) return null;
+              return (
+                <div key={id} className="flex-1 min-w-0 border rounded-sm p-2" style={{ borderColor: '#D9D2C2' }}>
+                  <p className="text-xs font-semibold truncate">{rec.description}</p>
+                  <p className="text-xs mb-2" style={{ color: '#8B8578' }}>{fmtDate(rec.meetingDate)} · {rec.fileName}</p>
+                  <MOMPreviewBody entry={previewCache[id]} fileName={rec.fileName} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {sorted.length === 0 ? (
+        <div className="bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
+          <p className="text-sm" style={{ color: '#8B8578' }}>No meeting records yet.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {sorted.map(rec => (
+            <div key={rec.id} className="bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
+              <div className="flex items-start justify-between gap-2 p-3">
+                <div className="flex items-start gap-2 min-w-0">
+                  <input
+                    type="checkbox"
+                    checked={compareSelected.includes(rec.id)}
+                    disabled={!compareSelected.includes(rec.id) && compareSelected.length >= 2}
+                    onChange={() => toggleCompare(rec.id)}
+                    className="mt-1"
+                    title="Select to compare"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{rec.description}</p>
+                    <p className="text-xs" style={{ color: '#8B8578' }}>
+                      {fmtDate(rec.meetingDate)} · {rec.fileName} · {fmtKB(rec.sizeKB)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button onClick={() => togglePreview(rec)} className="text-xs border px-2 py-1 rounded-sm" style={{ color: '#3D6178', borderColor: '#3D6178' }}>
+                    {expandedId === rec.id ? 'Hide' : 'Preview'}
+                  </button>
+                  <Trash2 size={14} className="cursor-pointer mt-1" style={{ color: '#8B8578' }} onClick={() => removeRecord(rec)} />
+                </div>
+              </div>
+              {expandedId === rec.id && (
+                <div className="border-t p-2" style={{ borderColor: '#D9D2C2', backgroundColor: '#FAF8F2' }}>
+                  <MOMPreviewBody entry={previewCache[rec.id]} fileName={rec.fileName} />
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>

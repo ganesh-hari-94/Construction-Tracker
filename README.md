@@ -37,33 +37,44 @@ Then connect the repo to Vercel or Netlify for automatic deploys on every
 push, or run `npm run build` yourself and upload the `dist/` folder anywhere
 that serves static files.
 
-## Important: data persistence
+## Data persistence: Supabase
 
-This app was originally built as a Claude artifact, where all data (projects,
-activities, manpower entries, procurement, etc.) was saved through Claude's
-built-in `window.storage` API. That API **does not exist outside Claude** —
-`src/App.jsx` calls it defensively (wrapped in try/catch), so the app will
-still run and won't crash, but **nothing will persist between page reloads**
-until it's wired to a real backend.
+Data is stored in a Supabase Postgres table (`kv_store`) that mirrors the
+original key/value storage model this app used as a Claude artifact — one
+row per key, JSON value. Two small per-device settings (the remembered login
+and which project you last viewed) live in the browser's `localStorage`
+instead, since they're device conveniences rather than data that needs to
+sync across devices.
 
-To make data persist for real, replace the `safeGet` / `safeSet` /
-`safeDelete` functions near the top of `src/App.jsx` with calls to an actual
-database. The two easiest options:
+**One-time setup:**
 
-- **Supabase** — free tier, Postgres-backed, minimal setup, good fit given
-  this app's per-project/per-collection data shape.
-- **Firebase Firestore** — similarly quick to wire up, real-time sync
-  included if you want live multi-user updates.
+1. In your Supabase project, open the SQL Editor and run everything in
+   `supabase-schema.sql` (creates the `kv_store` table and its access
+   policies).
+2. Set these as environment variables in Vercel (Project → Settings →
+   Environment Variables) — you said these are already declared there:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+3. For local development, copy `.env.example` to `.env` and fill in the same
+   two values (`.env` is already gitignored).
 
-Every place data is loaded or saved goes through those three functions and
-a fixed set of storage keys (see `PROJECT_DATA_KEYS` and the various
-`save*` functions in `App.jsx`), so the swap is localized — you won't need
-to touch the UI components themselves.
+**Security note worth reading:** the RLS policies in `supabase-schema.sql`
+are wide open — anyone with the anon key can read or write every row, same
+as how "shared" data worked before. That's fine behind the app's own login
+screen for an internal team tool, but the anon key ships in the built
+JavaScript bundle, so it's not a secret. If this app or its repo ever
+becomes public, tighten those policies before that happens.
+
+**Also newly true:** the old ~3.5MB-per-file cap on MOM/meeting-note
+uploads was a limit of the artifact's storage, not a Postgres limit —
+`jsonb` columns can comfortably hold much larger values. The app's own
+upload validation still enforces the old cap; let me know if you want that
+raised now that it's backed by Supabase.
 
 ## Authentication
 
 The login screen (username/password) is a **client-side gate only** — the
 credentials live in the bundled JavaScript, visible to anyone who inspects
 the built site. It's fine for keeping casual visitors out, but it is not
-real security. For actual access control, this would need to move to a
-backend (e.g. Supabase Auth) alongside the persistence work above.
+real security. For actual access control, this would need to move to
+Supabase Auth.
