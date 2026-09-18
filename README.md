@@ -52,9 +52,13 @@ sync across devices.
    `supabase-schema.sql` (creates the `kv_store` table and its access
    policies).
 2. Set these as environment variables in Vercel (Project → Settings →
-   Environment Variables) — you said these are already declared there:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
+   Environment Variables) — already declared there:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+   (These use Next.js's naming convention rather than Vite's `VITE_` prefix,
+   but that's fine — `vite.config.js` is configured to expose `NEXT_PUBLIC_`
+   vars to the client too, so nothing needed renaming.)
 3. For local development, copy `.env.example` to `.env` and fill in the same
    two values (`.env` is already gitignored).
 
