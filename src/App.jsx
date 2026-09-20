@@ -206,7 +206,16 @@ function StatLine({ value, label, color }) {
 function AuthScreen({ mode, setMode, form, setForm, onSubmit, error, busy, signupDone }) {
   if (signupDone) {
     return (
-      <div className="w-full min-h-[600px] flex items-center justify-center p-4" style={{ backgroundColor: '#1C2733', fontFamily: "'Inter', sans-serif" }}>
+      <div
+      className="w-full min-h-[600px] flex items-center justify-center p-4"
+      style={{
+        backgroundColor: '#1C2733',
+        backgroundImage: 'linear-gradient(135deg, rgba(40,57,74,0.95) 0%, rgba(28,39,51,0.95) 65%), linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)',
+        backgroundSize: 'cover, 24px 24px, 24px 24px',
+        borderTop: '3px solid #D98E2B',
+        fontFamily: "'Inter', sans-serif",
+      }}
+    >
         <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500&display=swap');`}</style>
         <div className="w-full max-w-xs bg-white rounded-sm p-6 text-center" style={{ border: '1px solid #3D6178' }}>
           <h1 className="text-lg font-semibold mb-2" style={{ fontFamily: "'Barlow Condensed', sans-serif", color: '#1C2733' }}>
@@ -222,7 +231,16 @@ function AuthScreen({ mode, setMode, form, setForm, onSubmit, error, busy, signu
   }
 
   return (
-    <div className="w-full min-h-[600px] flex items-center justify-center p-4" style={{ backgroundColor: '#1C2733', fontFamily: "'Inter', sans-serif" }}>
+    <div
+      className="w-full min-h-[600px] flex items-center justify-center p-4"
+      style={{
+        backgroundColor: '#1C2733',
+        backgroundImage: 'linear-gradient(135deg, rgba(40,57,74,0.95) 0%, rgba(28,39,51,0.95) 65%), linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)',
+        backgroundSize: 'cover, 24px 24px, 24px 24px',
+        borderTop: '3px solid #D98E2B',
+        fontFamily: "'Inter', sans-serif",
+      }}
+    >
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500&display=swap');`}</style>
       <div className="w-full max-w-xs bg-white rounded-sm p-6" style={{ border: '1px solid #3D6178' }}>
         <h1 className="text-xl font-semibold mb-1" style={{ fontFamily: "'Barlow Condensed', sans-serif", color: '#1C2733' }}>
@@ -283,7 +301,16 @@ function AuthScreen({ mode, setMode, form, setForm, onSubmit, error, busy, signu
 
 function PendingApprovalScreen({ email, onSignOut }) {
   return (
-    <div className="w-full min-h-[600px] flex items-center justify-center p-4" style={{ backgroundColor: '#1C2733', fontFamily: "'Inter', sans-serif" }}>
+    <div
+      className="w-full min-h-[600px] flex items-center justify-center p-4"
+      style={{
+        backgroundColor: '#1C2733',
+        backgroundImage: 'linear-gradient(135deg, rgba(40,57,74,0.95) 0%, rgba(28,39,51,0.95) 65%), linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)',
+        backgroundSize: 'cover, 24px 24px, 24px 24px',
+        borderTop: '3px solid #D98E2B',
+        fontFamily: "'Inter', sans-serif",
+      }}
+    >
       <div className="w-full max-w-xs bg-white rounded-sm p-6 text-center" style={{ border: '1px solid #D98E2B' }}>
         <h1 className="text-lg font-semibold mb-2" style={{ fontFamily: "'Barlow Condensed', sans-serif", color: '#1C2733' }}>
           Waiting for approval
@@ -663,14 +690,33 @@ export default function App() {
   }
 
   return (
-    <div className="w-full min-h-[600px]" style={{ backgroundColor: '#F1EDE4', color: '#2A2620', fontFamily: "'Inter', sans-serif" }}>
+    <div
+      className="w-full min-h-[600px]"
+      style={{
+        backgroundColor: '#F1EDE4',
+        backgroundImage: 'linear-gradient(rgba(61,97,120,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(61,97,120,0.08) 1px, transparent 1px)',
+        backgroundSize: '28px 28px',
+        color: '#2A2620',
+        fontFamily: "'Inter', sans-serif",
+      }}
+    >
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
         input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; }
+        .tracker-card { box-shadow: 0 1px 2px rgba(28,39,51,0.06), 0 4px 10px -4px rgba(28,39,51,0.12); }
       `}</style>
 
       {/* Header */}
-      <div className="px-4 py-3 flex items-center justify-between" style={{backgroundColor: '#1C2733', color: '#F1EDE4'}}>
+      <div
+        className="px-4 py-3 flex items-center justify-between"
+        style={{
+          backgroundColor: '#1C2733',
+          backgroundImage: 'linear-gradient(135deg, rgba(40,57,74,0.95) 0%, rgba(28,39,51,0.95) 65%), linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)',
+          backgroundSize: 'cover, 24px 24px, 24px 24px',
+          color: '#F1EDE4',
+          borderTop: '3px solid #D98E2B',
+        }}
+      >
         <div className="flex items-center gap-2 min-w-0 relative">
           {editingName ? (
             <input
@@ -768,10 +814,13 @@ export default function App() {
             <button
               key={t.id}
               onClick={() => setView(t.id)}
-              className="flex items-center gap-1.5 px-4 py-2.5 text-sm whitespace-nowrap border-b-2 transition-colors"
+              className="flex items-center gap-1.5 px-4 py-2.5 text-sm whitespace-nowrap border-b-2 transition-all"
               style={{
                 borderColor: active ? '#D98E2B' : 'transparent',
+                borderBottomWidth: active ? '3px' : '2px',
                 color: active ? '#F1EDE4' : '#8FA3B3',
+                backgroundColor: active ? 'rgba(217,142,43,0.08)' : 'transparent',
+                boxShadow: active ? '0 2px 10px -2px rgba(217,142,43,0.65)' : 'none',
               }}
             >
               <Icon size={15} />
@@ -852,7 +901,7 @@ function Dashboard({ manpower, trades, activities, overdueCount, pendingCount, p
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
+        <div className="tracker-card bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold" style={{ fontFamily: "'Barlow Condensed', sans-serif" }}>Today's manpower</h2>
             <button onClick={() => goTo('manpower')} className="text-xs hover:underline" style={{color: '#3D6178'}}>Update entry</button>
@@ -873,7 +922,7 @@ function Dashboard({ manpower, trades, activities, overdueCount, pendingCount, p
           )}
         </div>
 
-        <div className="bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
+        <div className="tracker-card bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
           <h2 className="text-lg font-semibold mb-3" style={{ fontFamily: "'Barlow Condensed', sans-serif" }}>Needs attention</h2>
           {attention.length === 0 ? (
             <p className="text-sm" style={{color: '#8B8578'}}>Nothing overdue or due soon.</p>
@@ -939,7 +988,7 @@ function ManpowerTrackerCard({ manpower }) {
   const latestChange = changeData[changeData.length - 1];
 
   return (
-    <div className="bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
+    <div className="tracker-card bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <h2 className="text-lg font-semibold" style={{ fontFamily: "'Barlow Condensed', sans-serif" }}>Manpower tracker</h2>
         <div className="flex gap-1">
@@ -1055,7 +1104,7 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades }) {
 
   return (
     <div className="space-y-5">
-      <div className="bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
+      <div className="tracker-card bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
         <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
           <div className="flex flex-wrap items-end gap-3">
             <div>
@@ -1136,7 +1185,7 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades }) {
         </button>
       </div>
 
-      <div className="bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
+      <div className="tracker-card bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
         <h2 className="text-lg font-semibold mb-3" style={{ fontFamily: "'Barlow Condensed', sans-serif" }}>Recent entries</h2>
         {history.length === 0 ? (
           <p className="text-sm" style={{color: '#8B8578'}}>No entries logged yet.</p>
@@ -1375,7 +1424,7 @@ function ActivitiesPage({ activities, saveActivities, trades, areas, saveAreas }
       )}
 
       {showForm && (
-        <div className="bg-white border rounded-sm p-4 space-y-3" style={{borderColor: '#D9D2C2'}}>
+        <div className="tracker-card bg-white border rounded-sm p-4 space-y-3" style={{borderColor: '#D9D2C2'}}>
           <h3 className="text-sm font-semibold" style={{color: '#4A453C'}}>{editingId ? 'Edit activity' : 'New activity'}</h3>
           <input
             placeholder="Activity name"
@@ -1480,7 +1529,7 @@ function ActivitiesPage({ activities, saveActivities, trades, areas, saveAreas }
         </div>
       )}
 
-      <div className="bg-white border rounded-sm overflow-hidden" style={{borderColor: '#D9D2C2'}}>
+      <div className="tracker-card bg-white border rounded-sm overflow-hidden" style={{borderColor: '#D9D2C2'}}>
         {filtered.length === 0 ? (
           <p className="text-sm p-4" style={{color: '#8B8578'}}>No activities in this view.</p>
         ) : (
@@ -1546,7 +1595,7 @@ function dayTotalForDiscipline(manpower, date, discipline) {
   return Number(entry.trades?.[discipline] || 0);
 }
 
-const emptySubForm = { description: '', manpower: '' };
+const emptySubForm = { description: '', manpower: '', plannedQty: '', uom: '', actualQty: '' };
 
 function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivities, saveSubActivities, areas }) {
   const [showForm, setShowForm] = useState(false);
@@ -1619,7 +1668,10 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
     resetSubForm();
   };
   const startEditSub = (s) => {
-    setSubForm({ description: s.description || '', manpower: s.manpower ?? '' });
+    setSubForm({
+      description: s.description || '', manpower: s.manpower ?? '',
+      plannedQty: s.plannedQty ?? '', uom: s.uom || '', actualQty: s.actualQty ?? '',
+    });
     setEditingSubId(s.id);
     setSubFormEntryId(s.entryId);
   };
@@ -1663,7 +1715,7 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
       )}
 
       {showForm && (
-        <div className="bg-white border rounded-sm p-4 space-y-3" style={{ borderColor: '#D9D2C2' }}>
+        <div className="tracker-card bg-white border rounded-sm p-4 space-y-3" style={{ borderColor: '#D9D2C2' }}>
           <h3 className="text-sm font-semibold" style={{ color: '#4A453C' }}>{editingId ? 'Edit entry' : 'New daily entry'}</h3>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -1733,7 +1785,7 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
       )}
 
       {sorted.length === 0 ? (
-        <div className="bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
+        <div className="tracker-card bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
           <p className="text-sm" style={{ color: '#8B8578' }}>No daily entries logged yet.</p>
         </div>
       ) : (
@@ -1749,7 +1801,7 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
             const subRemaining = Math.max(0, entryManpower - used);
             const exceedsSub = Number(subForm.manpower || 0) > subRemaining;
             return (
-              <div key={e.id} className="bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
+              <div key={e.id} className="tracker-card bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
                 <div className="flex items-center justify-between p-3 cursor-pointer" onClick={() => setExpandedId(expanded ? null : e.id)}>
                   <div className="flex items-center gap-2 min-w-0">
                     {expanded ? <ChevronDown size={16} style={{ color: '#8B8578' }} /> : <ChevronRight size={16} style={{ color: '#8B8578' }} />}
@@ -1784,6 +1836,11 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
                         <div className="min-w-0">
                           <p className="text-xs">{s.description}</p>
                           <p className="text-xs" style={{ color: '#8B8578' }}>Manpower: {s.manpower || 0}</p>
+                          {(s.plannedQty !== '' && s.plannedQty != null) || (s.actualQty !== '' && s.actualQty != null) ? (
+                            <p className="text-xs" style={{ color: '#8B8578' }}>
+                              Qty: {s.plannedQty || 0} planned · {s.actualQty || 0} actual{s.uom ? ` (${s.uom})` : ''}
+                            </p>
+                          ) : null}
                         </div>
                         <div className="flex gap-2 shrink-0">
                           <Pencil size={12} className="cursor-pointer" style={{ color: '#8B8578' }} onClick={() => startEditSub(s)} />
@@ -1814,6 +1871,31 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
                             {exceedsSub && ' — exceeds manpower engaged on this daily entry.'}
                           </p>
                         </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <input
+                            type="number" min="0"
+                            placeholder="Planned qty"
+                            value={subForm.plannedQty}
+                            onChange={(ev) => setSubForm({ ...subForm, plannedQty: ev.target.value })}
+                            className="border rounded-sm px-2 py-1.5 text-xs" style={{ borderColor: '#D9D2C2' }}
+                          />
+                          <input
+                            placeholder="UOM"
+                            value={subForm.uom}
+                            onChange={(ev) => setSubForm({ ...subForm, uom: ev.target.value })}
+                            className="border rounded-sm px-2 py-1.5 text-xs" style={{ borderColor: '#D9D2C2' }}
+                          />
+                          <input
+                            type="number" min="0"
+                            placeholder="Actual qty"
+                            value={subForm.actualQty}
+                            onChange={(ev) => setSubForm({ ...subForm, actualQty: ev.target.value })}
+                            className="border rounded-sm px-2 py-1.5 text-xs" style={{ borderColor: '#D9D2C2' }}
+                          />
+                        </div>
+                        <p className="text-xs" style={{ color: '#8B8578' }}>
+                          Qty and UOM here are just for tracking this sub-activity — independent of the parent activity's own quantities/unit.
+                        </p>
                         <div className="flex gap-2">
                           <button
                             onClick={() => submitSub(e)}
@@ -1975,7 +2057,7 @@ function ProcurementPage({ trades, items, saveItems, lots, saveLots, updates, sa
       </div>
 
       {showItemForm && (
-        <div className="bg-white border rounded-sm p-4 space-y-3" style={{ borderColor: '#D9D2C2' }}>
+        <div className="tracker-card bg-white border rounded-sm p-4 space-y-3" style={{ borderColor: '#D9D2C2' }}>
           <h3 className="text-sm font-semibold" style={{ color: '#4A453C' }}>{editingItemId ? 'Edit item' : 'New procurement item'}</h3>
           <input
             placeholder="Item name"
@@ -2011,7 +2093,7 @@ function ProcurementPage({ trades, items, saveItems, lots, saveLots, updates, sa
       )}
 
       {items.length === 0 ? (
-        <div className="bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
+        <div className="tracker-card bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
           <p className="text-sm" style={{ color: '#8B8578' }}>No procurement items yet. Add one to start tracking lots against it.</p>
         </div>
       ) : (
@@ -2020,7 +2102,7 @@ function ProcurementPage({ trades, items, saveItems, lots, saveLots, updates, sa
             const itemLots = lots.filter(l => l.itemId === item.id);
             const expanded = expandedId === item.id;
             return (
-              <div key={item.id} className="bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
+              <div key={item.id} className="tracker-card bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
                 <div
                   className="flex items-center justify-between p-3 cursor-pointer"
                   onClick={() => setExpandedId(expanded ? null : item.id)}
@@ -2049,7 +2131,7 @@ function ProcurementPage({ trades, items, saveItems, lots, saveLots, updates, sa
                     {itemLots.map(lot => {
                       const status = lotStatus(lot);
                       return (
-                        <div key={lot.id} className="bg-white border rounded-sm p-3" style={{ borderColor: '#D9D2C2' }}>
+                        <div key={lot.id} className="tracker-card bg-white border rounded-sm p-3" style={{ borderColor: '#D9D2C2' }}>
                           <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-sm font-medium">Lot {lot.lotNo}</span>
@@ -2143,7 +2225,7 @@ function ProcurementPage({ trades, items, saveItems, lots, saveLots, updates, sa
                     })}
 
                     {lotFormItemId === item.id ? (
-                      <div className="bg-white border rounded-sm p-3 space-y-3" style={{ borderColor: '#3D6178' }}>
+                      <div className="tracker-card bg-white border rounded-sm p-3 space-y-3" style={{ borderColor: '#3D6178' }}>
                         <h4 className="text-xs font-semibold" style={{ color: '#4A453C' }}>{editingLotId ? 'Edit lot' : 'New lot'}</h4>
                         <div className="grid grid-cols-3 gap-3">
                           <input
@@ -2427,7 +2509,7 @@ function MOMPage({ records, saveRecords, projectId }) {
       </p>
 
       {showForm && (
-        <div className="bg-white border rounded-sm p-4 space-y-3" style={{ borderColor: '#D9D2C2' }}>
+        <div className="tracker-card bg-white border rounded-sm p-4 space-y-3" style={{ borderColor: '#D9D2C2' }}>
           <h3 className="text-sm font-semibold" style={{ color: '#4A453C' }}>New record</h3>
           <input
             placeholder="Meeting description"
@@ -2474,7 +2556,7 @@ function MOMPage({ records, saveRecords, projectId }) {
       )}
 
       {compareOpen && compareSelected.length === 2 && (
-        <div className="bg-white border rounded-sm p-3" style={{ borderColor: '#3D6178' }}>
+        <div className="tracker-card bg-white border rounded-sm p-3" style={{ borderColor: '#3D6178' }}>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold" style={{ color: '#4A453C' }}>Comparing 2 records</h3>
             <X size={16} className="cursor-pointer" style={{ color: '#8B8578' }} onClick={() => setCompareOpen(false)} />
@@ -2496,13 +2578,13 @@ function MOMPage({ records, saveRecords, projectId }) {
       )}
 
       {sorted.length === 0 ? (
-        <div className="bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
+        <div className="tracker-card bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
           <p className="text-sm" style={{ color: '#8B8578' }}>No meeting records yet.</p>
         </div>
       ) : (
         <div className="space-y-2">
           {sorted.map(rec => (
-            <div key={rec.id} className="bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
+            <div key={rec.id} className="tracker-card bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
               <div className="flex items-start justify-between gap-2 p-3">
                 <div className="flex items-start gap-2 min-w-0">
                   <input
@@ -2577,7 +2659,7 @@ function AdminPage({ currentUserId }) {
         <div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin" style={{ color: '#3D6178' }} /></div>
       ) : (
         <>
-          <div className="bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
+          <div className="tracker-card bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
             <div className="px-3 py-2 text-xs font-semibold border-b" style={{ borderColor: '#D9D2C2', color: '#4A453C' }}>
               Pending approval ({pending.length})
             </div>
@@ -2603,7 +2685,7 @@ function AdminPage({ currentUserId }) {
             )}
           </div>
 
-          <div className="bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
+          <div className="tracker-card bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
             <div className="px-3 py-2 text-xs font-semibold border-b" style={{ borderColor: '#D9D2C2', color: '#4A453C' }}>
               Approved ({approved.length})
             </div>
@@ -2773,11 +2855,11 @@ function TimelinePage({ activities, procItems, procLots }) {
       {subView === 'activities' && (
       <>
       {rows.length === 0 ? (
-        <div className="bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
+        <div className="tracker-card bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
           <p className="text-sm" style={{ color: '#8B8578' }}>No activities scheduled within {monthLabel}.</p>
         </div>
       ) : (
-        <div className="bg-white border rounded-sm overflow-hidden flex" style={{ borderColor: '#D9D2C2' }}>
+        <div className="tracker-card bg-white border rounded-sm overflow-hidden flex" style={{ borderColor: '#D9D2C2' }}>
           <div className="w-32 shrink-0 border-r" style={{ borderColor: '#D9D2C2' }}>
             <div className="h-9 border-b flex items-center px-2 text-xs" style={{ borderColor: '#D9D2C2', color: '#8B8578' }}>Activity</div>
             {rows.map(({ a, delayDays, pct }) => (
@@ -2883,7 +2965,7 @@ function TimelinePage({ activities, procItems, procLots }) {
       </div>
 
       {unscheduled.length > 0 && (
-        <div className="bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
+        <div className="tracker-card bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
           <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5" style={{ color: '#4A453C' }}>
             <AlertTriangle size={14} style={{ color: '#D98E2B' }} /> Not yet scheduled
           </h3>
@@ -2900,15 +2982,15 @@ function TimelinePage({ activities, procItems, procLots }) {
       {subView === 'procurement' && (
         <>
           {selectedStages.length === 0 ? (
-            <div className="bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
+            <div className="tracker-card bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
               <p className="text-sm" style={{ color: '#8B8578' }}>Select at least one stage above to visualize.</p>
             </div>
           ) : procRows.length === 0 ? (
-            <div className="bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
+            <div className="tracker-card bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
               <p className="text-sm" style={{ color: '#8B8578' }}>No procurement activity for the selected stage(s) within {monthLabel}.</p>
             </div>
           ) : (
-            <div className="bg-white border rounded-sm overflow-hidden flex" style={{ borderColor: '#D9D2C2' }}>
+            <div className="tracker-card bg-white border rounded-sm overflow-hidden flex" style={{ borderColor: '#D9D2C2' }}>
               <div className="w-32 shrink-0 border-r" style={{ borderColor: '#D9D2C2' }}>
                 <div className="h-9 border-b flex items-center px-2 text-xs" style={{ borderColor: '#D9D2C2', color: '#8B8578' }}>Item / Lot</div>
                 {procRows.map(({ lot, item }) => (
