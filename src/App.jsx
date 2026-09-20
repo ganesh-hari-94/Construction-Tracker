@@ -1606,6 +1606,8 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
   const [editingSubId, setEditingSubId] = useState(null);
   const [subForm, setSubForm] = useState(emptySubForm);
   const [areaFilter, setAreaFilter] = useState('All');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   const activityById = useMemo(() => Object.fromEntries(activities.map(a => [a.id, a])), [activities]);
   const selectedActivity = activityById[form.activityId];
@@ -1648,8 +1650,10 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
     if (areaFilter !== 'All') {
       list = list.filter(e => (activityById[e.activityId]?.area || 'Unassigned') === areaFilter);
     }
+    if (dateFrom) list = list.filter(e => e.date >= dateFrom);
+    if (dateTo) list = list.filter(e => e.date <= dateTo);
     return list.sort((a, b) => (a.date < b.date ? 1 : -1));
-  }, [dailyLog, areaFilter, activityById]);
+  }, [dailyLog, areaFilter, dateFrom, dateTo, activityById]);
 
   const resetSubForm = () => { setSubForm(emptySubForm); setEditingSubId(null); setSubFormEntryId(null); };
   const subUsedFor = (entryId, excludeId) => subActivities
@@ -1709,6 +1713,30 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
           ))}
         </div>
       )}
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs" style={{ color: '#8B8578' }}>Date:</span>
+        <input
+          type="date" value={dateFrom}
+          onChange={(e) => setDateFrom(e.target.value)}
+          className="border rounded-sm px-2 py-1 text-xs" style={{ borderColor: '#D9D2C2' }}
+        />
+        <span className="text-xs" style={{ color: '#8B8578' }}>to</span>
+        <input
+          type="date" value={dateTo}
+          onChange={(e) => setDateTo(e.target.value)}
+          className="border rounded-sm px-2 py-1 text-xs" style={{ borderColor: '#D9D2C2' }}
+        />
+        {(dateFrom || dateTo) && (
+          <button
+            onClick={() => { setDateFrom(''); setDateTo(''); }}
+            className="text-xs underline"
+            style={{ color: '#3D6178' }}
+          >
+            Clear
+          </button>
+        )}
+      </div>
 
       {activities.length === 0 && (
         <p className="text-sm" style={{ color: '#8B8578' }}>Add activities in the Activities tab first, then log daily progress against them here.</p>
