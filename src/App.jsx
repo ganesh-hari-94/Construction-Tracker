@@ -302,6 +302,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState('');
   const [authMode, setAuthMode] = useState('signin');
   const [authForm, setAuthForm] = useState({ email: '', password: '' });
   const [authError, setAuthError] = useState('');
@@ -347,12 +348,23 @@ export default function App() {
 
   // Once signed in, load this user's profile row to check approved/is_admin.
   useEffect(() => {
-    if (!session) { setProfile(null); return; }
+    if (!session) { setProfile(null); setProfileError(''); return; }
     let cancelled = false;
     setProfileLoading(true);
+    setProfileError('');
     (async () => {
-      const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
-      if (!cancelled) { setProfile(data || null); setProfileLoading(false); }
+      const { data, error } = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+      if (cancelled) return;
+      if (error) {
+        setProfile(null);
+        setProfileError(error.message);
+      } else if (!data) {
+        setProfile(null);
+        setProfileError('No account record found for this login. The one-time database setup may not be finished yet — contact an admin.');
+      } else {
+        setProfile(data);
+      }
+      setProfileLoading(false);
     })();
     return () => { cancelled = true; };
   }, [session]);
@@ -616,10 +628,24 @@ export default function App() {
     );
   }
 
-  if (profileLoading || !profile) {
+  if (profileLoading) {
     return (
       <div className="w-full h-full min-h-[500px] flex items-center justify-center" style={{backgroundColor: '#F1EDE4'}}>
         <Loader2 className="animate-spin" style={{color: '#3D6178'}} size={28} />
+      </div>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <div className="w-full min-h-[600px] flex items-center justify-center p-4" style={{ backgroundColor: '#1C2733' }}>
+        <div className="w-full max-w-xs bg-white rounded-sm p-6 text-center" style={{ border: '1px solid #B5482F' }}>
+          <h1 className="text-lg font-semibold mb-2" style={{ fontFamily: "'Barlow Condensed', sans-serif", color: '#1C2733' }}>
+            Couldn't load your account
+          </h1>
+          <p className="text-xs mb-4" style={{ color: '#8B8578' }}>{profileError || 'Something went wrong loading your account.'}</p>
+          <button onClick={handleSignOut} className="text-xs underline" style={{ color: '#3D6178' }}>Sign out</button>
+        </div>
       </div>
     );
   }
