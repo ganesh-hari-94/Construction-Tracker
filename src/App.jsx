@@ -192,9 +192,6 @@ function Badge({ label, color }) {
   );
 }
 
-const AUTH_USERNAME = 'Ganesh';
-const AUTH_PASSWORD = 'constructganty123';
-
 function StatLine({ value, label, color }) {
   return (
     <div className="flex flex-col items-start px-4 py-3 border-r last:border-r-0 min-w-[84px]" style={{borderColor: '#D9D2C2'}}>
@@ -206,7 +203,24 @@ function StatLine({ value, label, color }) {
   );
 }
 
-function LoginScreen({ form, setForm, onSubmit, error }) {
+function AuthScreen({ mode, setMode, form, setForm, onSubmit, error, busy, signupDone }) {
+  if (signupDone) {
+    return (
+      <div className="w-full min-h-[600px] flex items-center justify-center p-4" style={{ backgroundColor: '#1C2733', fontFamily: "'Inter', sans-serif" }}>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500&display=swap');`}</style>
+        <div className="w-full max-w-xs bg-white rounded-sm p-6 text-center" style={{ border: '1px solid #3D6178' }}>
+          <h1 className="text-lg font-semibold mb-2" style={{ fontFamily: "'Barlow Condensed', sans-serif", color: '#1C2733' }}>
+            Check your inbox
+          </h1>
+          <p className="text-xs" style={{ color: '#8B8578' }}>
+            Account created. If email confirmation is required you'll get a confirmation link first — either way,
+            an admin has been notified and needs to approve your account before you can sign in.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full min-h-[600px] flex items-center justify-center p-4" style={{ backgroundColor: '#1C2733', fontFamily: "'Inter', sans-serif" }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500&display=swap');`}</style>
@@ -214,12 +228,15 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
         <h1 className="text-xl font-semibold mb-1" style={{ fontFamily: "'Barlow Condensed', sans-serif", color: '#1C2733' }}>
           Construction Site Tracker
         </h1>
-        <p className="text-xs mb-5" style={{ color: '#8B8578' }}>Sign in to continue</p>
+        <p className="text-xs mb-5" style={{ color: '#8B8578' }}>
+          {mode === 'signin' ? 'Sign in to continue' : 'Create an account'}
+        </p>
 
-        <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Username</label>
+        <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Email</label>
         <input
-          value={form.username}
-          onChange={(e) => setForm({ ...form, username: e.target.value })}
+          type="email"
+          value={form.email}
+          onChange={(e) => setForm({ ...form, email: e.target.value })}
           onKeyDown={(e) => e.key === 'Enter' && onSubmit()}
           className="w-full border rounded-sm px-2 py-1.5 text-sm mb-3" style={{ borderColor: '#D9D2C2' }}
           autoFocus
@@ -240,16 +257,41 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
 
         <button
           onClick={onSubmit}
-          className="w-full text-white px-3 py-2 rounded-sm text-sm font-medium"
-          style={{ backgroundColor: '#1C2733' }}
+          disabled={busy}
+          className="w-full text-white px-3 py-2 rounded-sm text-sm font-medium flex items-center justify-center gap-1.5"
+          style={{ backgroundColor: busy ? '#B7ADA0' : '#1C2733' }}
         >
-          Sign in
+          {busy && <Loader2 size={14} className="animate-spin" />}
+          {mode === 'signin' ? 'Sign in' : 'Create account'}
         </button>
 
-        <p className="text-xs mt-4" style={{ color: '#C4BCA8' }}>
-          This is a simple access gate for this tool — the credential lives in the app's own code, not a secure login
-          system, so treat it as a light deterrent rather than real protection for sensitive data.
+        <button
+          onClick={() => { setMode(mode === 'signin' ? 'signup' : 'signin'); }}
+          className="w-full text-xs mt-3 underline"
+          style={{ color: '#3D6178' }}
+        >
+          {mode === 'signin' ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
+        </button>
+
+        <p className="text-xs mt-4" style={{ color: '#8B8578' }}>
+          New accounts need approval from an admin before they can sign in.
         </p>
+      </div>
+    </div>
+  );
+}
+
+function PendingApprovalScreen({ email, onSignOut }) {
+  return (
+    <div className="w-full min-h-[600px] flex items-center justify-center p-4" style={{ backgroundColor: '#1C2733', fontFamily: "'Inter', sans-serif" }}>
+      <div className="w-full max-w-xs bg-white rounded-sm p-6 text-center" style={{ border: '1px solid #D98E2B' }}>
+        <h1 className="text-lg font-semibold mb-2" style={{ fontFamily: "'Barlow Condensed', sans-serif", color: '#1C2733' }}>
+          Waiting for approval
+        </h1>
+        <p className="text-xs mb-4" style={{ color: '#8B8578' }}>
+          {email} is signed up but hasn't been approved yet. An admin has been notified — try again once approved.
+        </p>
+        <button onClick={onSignOut} className="text-xs underline" style={{ color: '#3D6178' }}>Sign out</button>
       </div>
     </div>
   );
@@ -257,9 +299,14 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
 
 export default function App() {
   const [authChecked, setAuthChecked] = useState(false);
-  const [authed, setAuthed] = useState(false);
-  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
-  const [loginError, setLoginError] = useState('');
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [authMode, setAuthMode] = useState('signin');
+  const [authForm, setAuthForm] = useState({ email: '', password: '' });
+  const [authError, setAuthError] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [signupDone, setSignupDone] = useState(false);
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -282,33 +329,78 @@ export default function App() {
 
   const activeProject = projects.find(p => p.id === activeProjectId) || null;
 
-  // Check for a remembered login on this device (personal, not shared between viewers).
+  // Supabase Auth handles its own session persistence (localStorage under its
+  // own key), so this just reads whatever session already exists on load and
+  // then stays in sync with sign-in/sign-out events.
   useEffect(() => {
-    (async () => {
-      const ok = await safeGet('auth-ok', false);
-      if (ok === true) setAuthed(true);
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setSession(data.session);
       setAuthChecked(true);
-    })();
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+    return () => { mounted = false; listener.subscription.unsubscribe(); };
   }, []);
 
-  const handleLogin = () => {
-    if (loginForm.username === AUTH_USERNAME && loginForm.password === AUTH_PASSWORD) {
-      setAuthed(true);
-      setLoginError('');
-      safeSet('auth-ok', true, false);
+  // Once signed in, load this user's profile row to check approved/is_admin.
+  useEffect(() => {
+    if (!session) { setProfile(null); return; }
+    let cancelled = false;
+    setProfileLoading(true);
+    (async () => {
+      const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+      if (!cancelled) { setProfile(data || null); setProfileLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
+  const handleAuthSubmit = async () => {
+    if (!authForm.email.trim() || !authForm.password) {
+      setAuthError('Enter both email and password.');
+      return;
+    }
+    setAuthBusy(true);
+    setAuthError('');
+    if (authMode === 'signin') {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: authForm.email.trim(), password: authForm.password,
+      });
+      setAuthBusy(false);
+      if (error) setAuthError(error.message);
     } else {
-      setLoginError('Incorrect username or password.');
+      const { error } = await supabase.auth.signUp({
+        email: authForm.email.trim(), password: authForm.password,
+      });
+      if (error) {
+        setAuthBusy(false);
+        setAuthError(error.message);
+        return;
+      }
+      // Best-effort — don't block the signup flow if the email notification fails.
+      try {
+        await supabase.functions.invoke('notify-signup', { body: { email: authForm.email.trim() } });
+      } catch (e) { /* ignore — admin can still see them in the Admin tab */ }
+      setAuthBusy(false);
+      setSignupDone(true);
     }
   };
 
-  const handleLogout = () => {
-    setAuthed(false);
-    setLoginForm({ username: '', password: '' });
-    safeSet('auth-ok', false, false);
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    setProfile(null);
+    setAuthForm({ email: '', password: '' });
+    setSignupDone(false);
   };
 
   // Phase 1: load (or migrate/initialize) the project list, then resolve which project is active.
+  // Gated on approval — kv_store's RLS policy blocks unapproved users anyway, so there's no
+  // point trying (or showing a stuck spinner) before that's true.
   useEffect(() => {
+    if (!profile?.approved) return;
     (async () => {
       let list = await safeGet('projects-list', true);
 
@@ -339,7 +431,7 @@ export default function App() {
       setActiveProjectId(resolved || null);
       setProjectsLoading(false);
     })();
-  }, []);
+  }, [profile?.approved]);
 
   // Phase 2: whenever the active project changes, load its data.
   useEffect(() => {
@@ -509,15 +601,31 @@ export default function App() {
     );
   }
 
-  if (!authed) {
+  if (!session) {
     return (
-      <LoginScreen
-        form={loginForm}
-        setForm={setLoginForm}
-        onSubmit={handleLogin}
-        error={loginError}
+      <AuthScreen
+        mode={authMode}
+        setMode={setAuthMode}
+        form={authForm}
+        setForm={setAuthForm}
+        onSubmit={handleAuthSubmit}
+        error={authError}
+        busy={authBusy}
+        signupDone={signupDone}
       />
     );
+  }
+
+  if (profileLoading || !profile) {
+    return (
+      <div className="w-full h-full min-h-[500px] flex items-center justify-center" style={{backgroundColor: '#F1EDE4'}}>
+        <Loader2 className="animate-spin" style={{color: '#3D6178'}} size={28} />
+      </div>
+    );
+  }
+
+  if (!profile.approved) {
+    return <PendingApprovalScreen email={profile.email} onSignOut={handleSignOut} />;
   }
 
   if (projectsLoading) {
@@ -609,7 +717,10 @@ export default function App() {
         <div className="flex items-center gap-3 text-xs shrink-0 ml-2" style={{color: '#8FA3B3'}}>
           {(saving || dataLoading) && <Loader2 size={13} className="animate-spin" />}
           <span>{fmtDate(todayStr())}</span>
-          <button onClick={handleLogout} className="underline" style={{color: '#8FA3B3'}}>Sign out</button>
+          {profile?.is_admin && (
+            <button onClick={() => setView('admin')} className="underline" style={{color: '#8FA3B3'}}>Admin</button>
+          )}
+          <button onClick={handleSignOut} className="underline" style={{color: '#8FA3B3'}}>Sign out</button>
         </div>
       </div>
 
@@ -681,6 +792,9 @@ export default function App() {
         )}
         {view === 'timeline' && (
           <TimelinePage activities={activities} procItems={procItems} procLots={procLots} />
+        )}
+        {view === 'admin' && profile?.is_admin && (
+          <AdminPage currentUserId={session.user.id} />
         )}
       </div>
     </div>
@@ -2395,6 +2509,98 @@ function MOMPage({ records, saveRecords, projectId }) {
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Admin: user approvals ---------------- */
+function AdminPage({ currentUserId }) {
+  const [profiles, setProfiles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    const { data, error: err } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+    if (err) setError(err.message);
+    else setProfiles(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const setApproved = async (id, approved) => {
+    setBusyId(id);
+    const { error: err } = await supabase.from('profiles').update({ approved }).eq('id', id);
+    setBusyId(null);
+    if (err) { setError(err.message); return; }
+    setProfiles(prev => prev.map(p => p.id === id ? { ...p, approved } : p));
+  };
+
+  const pending = profiles.filter(p => !p.approved);
+  const approved = profiles.filter(p => p.approved);
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-lg font-semibold" style={{ fontFamily: "'Barlow Condensed', sans-serif" }}>User approvals</h2>
+      {error && <p className="text-xs" style={{ color: '#B5482F' }}>{error}</p>}
+
+      {loading ? (
+        <div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin" style={{ color: '#3D6178' }} /></div>
+      ) : (
+        <>
+          <div className="bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
+            <div className="px-3 py-2 text-xs font-semibold border-b" style={{ borderColor: '#D9D2C2', color: '#4A453C' }}>
+              Pending approval ({pending.length})
+            </div>
+            {pending.length === 0 ? (
+              <p className="text-sm p-3" style={{ color: '#8B8578' }}>No accounts waiting for approval.</p>
+            ) : (
+              pending.map(p => (
+                <div key={p.id} className="flex items-center justify-between p-3 border-b last:border-b-0" style={{ borderColor: '#EEE8DA' }}>
+                  <div>
+                    <p className="text-sm">{p.email}</p>
+                    <p className="text-xs" style={{ color: '#8B8578' }}>Signed up {fmtDate(p.created_at.slice(0, 10))}</p>
+                  </div>
+                  <button
+                    onClick={() => setApproved(p.id, true)}
+                    disabled={busyId === p.id}
+                    className="flex items-center gap-1.5 text-white px-3 py-1.5 rounded-sm text-sm"
+                    style={{ backgroundColor: busyId === p.id ? '#B7ADA0' : '#4F7C52' }}
+                  >
+                    {busyId === p.id ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Approve
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="bg-white border rounded-sm overflow-hidden" style={{ borderColor: '#D9D2C2' }}>
+            <div className="px-3 py-2 text-xs font-semibold border-b" style={{ borderColor: '#D9D2C2', color: '#4A453C' }}>
+              Approved ({approved.length})
+            </div>
+            {approved.map(p => (
+              <div key={p.id} className="flex items-center justify-between p-3 border-b last:border-b-0" style={{ borderColor: '#EEE8DA' }}>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm">{p.email}</p>
+                  {p.is_admin && <Badge label="Admin" color="#3D6178" />}
+                </div>
+                {!p.is_admin && p.id !== currentUserId && (
+                  <button
+                    onClick={() => setApproved(p.id, false)}
+                    disabled={busyId === p.id}
+                    className="text-xs border px-2 py-1 rounded-sm"
+                    style={{ color: '#B5482F', borderColor: '#B5482F' }}
+                  >
+                    Revoke
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
