@@ -121,3 +121,43 @@ no re-signup needed.
 not configured yet, secret missing, etc.), signup itself still succeeds —
 the new account just won't be visible to the admin except by checking the
 Admin tab directly. It's not a silent data loss, just a missed nudge.
+
+## AI Insights (optional)
+
+The **Insights** tab lets you ask questions about the current project
+("what's overdue?", "how's manpower trending?") and get a quick answer from
+Google's Gemini API (free tier — no billing needed). A compact text summary
+of the project (activity status breakdown, overdue items, manpower trend,
+procurement delays — not raw file uploads or full record dumps) is built
+client-side and sent along with your question.
+
+**One-time setup:**
+
+1. Create a free API key at
+   [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — no
+   credit card required.
+2. Deploy the Edge Function and set the secret (same pattern as
+   `notify-signup` — via the Supabase dashboard's function editor, or CLI):
+   ```bash
+   supabase functions deploy ai-insights
+   supabase secrets set GEMINI_API_KEY=your-gemini-api-key
+   ```
+
+**Worth knowing about the free tier, stated plainly:**
+- **Rate limits, not dollar limits.** The free tier caps requests per day
+  (roughly a few hundred to low thousands depending on Google's current
+  limits for `gemini-2.5-flash` — check your actual quota in AI Studio) —
+  it doesn't bill you if you go over, it just stops answering until the
+  limit resets.
+- **Google may use free-tier prompts to improve their models.** This is
+  documented Google policy, not a guess. The data sent is a summary (status
+  counts, overdue items, trends) rather than raw uploaded files, but it's
+  still your project's data — decide if that's an acceptable tradeoff for
+  $0 cost. Attaching a billing account removes this and switches to paid,
+  metered pricing instead.
+- If usage ever needs to scale beyond casual use, that's the point to
+  revisit — either accept paid Gemini pricing or swap back to another
+  provider (the Edge Function is a thin, swappable wrapper either way).
+
+**If the key is missing or invalid**, the Insights tab shows the actual
+error message returned by the function rather than failing silently.

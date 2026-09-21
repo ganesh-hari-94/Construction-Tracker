@@ -3,7 +3,7 @@ import { supabase } from './supabaseClient';
 import {
   LayoutDashboard, Users, ClipboardList, CalendarDays, Plus, Trash2,
   Pencil, Check, X, AlertTriangle, ChevronLeft, ChevronRight, Loader2,
-  ChevronDown, Save, ListChecks, Package, FileText
+  ChevronDown, Save, ListChecks, Package, FileText, Sparkles
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell
@@ -806,6 +806,7 @@ export default function App() {
           { id: 'dailylog', label: 'Daily Log', icon: ListChecks },
           { id: 'procurement', label: 'Procurement', icon: Package },
           { id: 'mom', label: 'MOM / Notes', icon: FileText },
+          { id: 'insights', label: 'Insights', icon: Sparkles },
           { id: 'timeline', label: 'Timeline', icon: CalendarDays },
         ].map(t => {
           const Icon = t.icon;
@@ -864,6 +865,13 @@ export default function App() {
         )}
         {view === 'mom' && (
           <MOMPage records={momRecords} saveRecords={saveMomRecords} projectId={activeProjectId} />
+        )}
+        {view === 'insights' && (
+          <InsightsPage
+            projectName={activeProject?.name}
+            activities={activities} manpower={manpower} dailyLog={dailyLog}
+            procItems={procItems} procLots={procLots} momRecords={momRecords}
+          />
         )}
         {view === 'timeline' && (
           <TimelinePage activities={activities} procItems={procItems} procLots={procLots} />
@@ -2737,6 +2745,180 @@ function AdminPage({ currentUserId }) {
             ))}
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Insights (AI) ---------------- */
+function buildProjectContext({ projectName, activities, manpower, dailyLog, procItems, procLots, momRecords }) {
+  const today = todayStr();
+  const lines = [];
+  lines.push(`Project: ${projectName || 'Untitled'}`);
+  lines.push(`Today's date: ${today}`);
+
+  // Activities
+  lines.push('', `## Activities (${activities.length} total)`);
+  const catCounts = {};
+  activities.forEach(a => { const c = scheduleCategory(a); catCounts[c] = (catCounts[c] || 0) + 1; });
+  Object.entries(catCounts).forEach(([label, n]) => lines.push(`- ${label}: ${n}`));
+  const overdue = activities
+    .filter(a => scheduleCategory(a).startsWith('Overdue'))
+    .map(a => {
+      const days = a.plannedEnd ? daysBetween(a.plannedEnd, today) : 0;
+      return `${a.name}${a.area ? ` (${a.area})` : ''} — ${days > 0 ? days + 'd overdue' : 'overdue'}${a.category ? `, ${a.category}` : ''}`;
+    })
+    .slice(0, 12);
+  if (overdue.length) lines.push('Overdue activities:', ...overdue.map(o => `- ${o}`));
+  const withScope = activities.filter(a => a.totalScope && Number(a.totalScope) > 0);
+  if (withScope.length) {
+    const avgPct = withScope.reduce((sum, a) => sum + (percentComplete(a) || 0), 0) / withScope.length;
+    lines.push(`Average completion across activities with scope tracked: ${Math.round(avgPct)}%`);
+  }
+
+  // Manpower
+  lines.push('', '## Manpower');
+  const todayMp = manpower[today];
+  if (todayMp) {
+    const total = Object.values(todayMp.trades || {}).reduce((s, v) => s + Number(v || 0), 0);
+    const byDiscipline = Object.entries(todayMp.trades || {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => `${k}: ${v}`).join(', ');
+    lines.push(`Today's total manpower: ${total}${byDiscipline ? ` (${byDiscipline})` : ''}`);
+  } else {
+    lines.push('No manpower entry logged for today.');
+  }
+  const recentDates = Object.keys(manpower).sort().slice(-7);
+  if (recentDates.length) {
+    const trend = recentDates.map(d => {
+      const t = Object.values(manpower[d].trades || {}).reduce((s, v) => s + Number(v || 0), 0);
+      return `${d}: ${t}`;
+    }).join(', ');
+    lines.push(`Last ${recentDates.length} days manpower trend: ${trend}`);
+  }
+
+  // Daily log
+  lines.push('', '## Daily progress log');
+  const last7 = [...dailyLog].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 20);
+  if (last7.length) {
+    const plannedSum = last7.reduce((s, e) => s + Number(e.plannedQty || 0), 0);
+    const actualSum = last7.reduce((s, e) => s + Number(e.actualQty || 0), 0);
+    lines.push(`Most recent ${last7.length} daily entries: planned qty total ${plannedSum}, actual qty total ${actualSum} (variance ${actualSum - plannedSum}).`);
+  } else {
+    lines.push('No daily log entries yet.');
+  }
+
+  // Procurement
+  lines.push('', `## Procurement (${procItems.length} items, ${procLots.length} lots)`);
+  const lotStatusCounts = {};
+  procLots.forEach(l => { const s = lotStatus(l).label; lotStatusCounts[s] = (lotStatusCounts[s] || 0) + 1; });
+  Object.entries(lotStatusCounts).forEach(([label, n]) => lines.push(`- ${label}: ${n}`));
+  const delayedLots = procLots
+    .filter(l => lotStatus(l).label.includes('overdue') || lotStatus(l).label.includes('delayed'))
+    .map(l => {
+      const item = procItems.find(i => i.id === l.itemId);
+      return `${item ? item.name : 'Unknown item'} — Lot ${l.lotNo} (${lotStatus(l).label})`;
+    })
+    .slice(0, 10);
+  if (delayedLots.length) lines.push('Delayed/overdue lots:', ...delayedLots.map(d => `- ${d}`));
+
+  // MOM
+  lines.push('', `## Meeting records: ${momRecords.length} on file`);
+
+  return lines.join('\n');
+}
+
+function InsightsPage({ projectName, activities, manpower, dailyLog, procItems, procLots, momRecords }) {
+  const [prompt, setPrompt] = useState('');
+  const [answer, setAnswer] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [lastPrompt, setLastPrompt] = useState('');
+
+  const suggestions = [
+    'What activities are overdue and by how much?',
+    "How is today's manpower compared to the last week?",
+    'What procurement lots are delayed?',
+    'Summarize overall project progress.',
+  ];
+
+  const ask = async (question) => {
+    const q = (question ?? prompt).trim();
+    if (!q || busy) return;
+    setBusy(true);
+    setError('');
+    setAnswer('');
+    setLastPrompt(q);
+    try {
+      const context = buildProjectContext({ projectName, activities, manpower, dailyLog, procItems, procLots, momRecords });
+      const { data, error: fnError } = await supabase.functions.invoke('ai-insights', { body: { prompt: q, context } });
+      if (fnError) throw fnError;
+      if (data?.error) throw new Error(data.error);
+      setAnswer(data?.answer || 'No answer returned.');
+    } catch (err) {
+      setError(err.message || 'Something went wrong asking for insights.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-lg font-semibold" style={{ fontFamily: "'Barlow Condensed', sans-serif" }}>Insights</h2>
+      <p className="text-xs" style={{ color: '#8B8578' }}>
+        Ask a question about this project — activities, manpower, procurement, or daily progress. A summary of the
+        current data is sent along with your question; nothing is stored by the AI provider beyond that request.
+      </p>
+
+      <div className="flex flex-wrap gap-2">
+        {suggestions.map(s => (
+          <button
+            key={s}
+            onClick={() => { setPrompt(s); ask(s); }}
+            disabled={busy}
+            className="text-xs border px-2.5 py-1 rounded-sm"
+            style={{ color: '#3D6178', borderColor: '#3D6178' }}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex gap-2">
+        <input
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && ask()}
+          placeholder="Ask about this project..."
+          className="flex-1 border rounded-sm px-3 py-2 text-sm" style={{ borderColor: '#D9D2C2' }}
+        />
+        <button
+          onClick={() => ask()}
+          disabled={busy || !prompt.trim()}
+          className="flex items-center gap-1.5 text-white px-4 py-2 rounded-sm text-sm"
+          style={{ backgroundColor: (busy || !prompt.trim()) ? '#B7ADA0' : '#1C2733' }}
+        >
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+          Ask
+        </button>
+      </div>
+
+      {error && (
+        <div className="tracker-card bg-white border rounded-sm p-3" style={{ borderColor: '#B5482F' }}>
+          <p className="text-xs" style={{ color: '#B5482F' }}>{error}</p>
+        </div>
+      )}
+
+      {(answer || busy) && (
+        <div className="tracker-card bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
+          {lastPrompt && <p className="text-xs mb-2 font-medium" style={{ color: '#4A453C' }}>{lastPrompt}</p>}
+          {busy ? (
+            <div className="flex items-center gap-2">
+              <Loader2 size={16} className="animate-spin" style={{ color: '#3D6178' }} />
+              <span className="text-xs" style={{ color: '#8B8578' }}>Thinking...</span>
+            </div>
+          ) : (
+            <p className="text-sm whitespace-pre-wrap" style={{ color: '#2A2620' }}>{answer}</p>
+          )}
+        </div>
       )}
     </div>
   );
