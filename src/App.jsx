@@ -2850,7 +2850,20 @@ function InsightsPage({ projectName, activities, manpower, dailyLog, procItems, 
     try {
       const context = buildProjectContext({ projectName, activities, manpower, dailyLog, procItems, procLots, momRecords });
       const { data, error: fnError } = await supabase.functions.invoke('ai-insights', { body: { prompt: q, context } });
-      if (fnError) throw fnError;
+      if (fnError) {
+        // supabase-js's own error message here is just "Edge Function returned a
+        // non-2xx status code" — the useful detail is in the response body the
+        // function actually sent, which lives on fnError.context.
+        let detail = fnError.message || 'Edge Function request failed.';
+        const ctx = fnError.context;
+        if (ctx) {
+          try {
+            const body = typeof ctx.json === 'function' ? await ctx.json() : ctx;
+            if (body?.error) detail = body.error;
+          } catch (e) { /* fall back to the generic message */ }
+        }
+        throw new Error(detail);
+      }
       if (data?.error) throw new Error(data.error);
       setAnswer(data?.answer || 'No answer returned.');
     } catch (err) {
