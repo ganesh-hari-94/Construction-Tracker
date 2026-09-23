@@ -87,7 +87,16 @@ function findValue(row, aliases) {
 }
 function toDateStr(v) {
   if (!v) return '';
-  if (v instanceof Date && !isNaN(v.getTime())) return v.toISOString().slice(0, 10);
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    // Excel/SheetJS date cells come through as Date objects built from local
+    // calendar components — reading them back via getFullYear/getMonth/getDate
+    // (not toISOString, which converts through UTC first) avoids shifting the
+    // date by a day in timezones ahead of UTC.
+    const y = v.getFullYear();
+    const m = String(v.getMonth() + 1).padStart(2, '0');
+    const day = String(v.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
   const d = new Date(String(v).trim());
   return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
 }
@@ -604,8 +613,10 @@ export default function App() {
   };
 
   // Keep each activity's Balance Scope in sync with cumulative Actual Qty logged against it
-  // in the Daily Log. Only applies to activities that have a Total Scope set. Runs after data
-  // for the active project has finished loading, and only writes when a value actually changed.
+  // in the Daily Log. Only applies to activities that have a Total Scope set AND at least one
+  // Daily Log entry — an activity with no daily entries yet (e.g. just imported from Excel with
+  // its own starting Balance Scope) is left alone rather than reset to "0 progress." Runs after
+  // data for the active project has finished loading, and only writes when a value actually changed.
   useEffect(() => {
     if (dataLoading || !activeProjectId) return;
     const actualByActivity = {};
@@ -617,7 +628,8 @@ export default function App() {
     const updated = activities.map(a => {
       const total = Number(a.totalScope);
       if (!a.totalScope || isNaN(total) || total <= 0) return a;
-      const loggedActual = actualByActivity[a.id] || 0;
+      if (!(a.id in actualByActivity)) return a;
+      const loggedActual = actualByActivity[a.id];
       const newBalance = Math.max(0, Math.round((total - loggedActual) * 100) / 100);
       if (Number(a.balanceScope) === newBalance && a.balanceScope !== '') return a;
       changed = true;
