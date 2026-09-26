@@ -185,7 +185,7 @@ async function safeDelete(key, shared = true) {
 }
 
 const PROJECT_DATA_KEYS = [
-  'trades-config', 'areas-config', 'manpower-entries', 'activities', 'daily-log-entries',
+  'trades-config', 'areas-config', 'subcontractors-config', 'manpower-entries', 'activities', 'daily-log-entries',
   'daily-log-subactivities', 'procurement-items', 'procurement-lots', 'procurement-updates',
   'mom-records',
 ];
@@ -355,6 +355,7 @@ export default function App() {
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   const [trades, setTrades] = useState(DEFAULT_TRADES);
   const [areas, setAreas] = useState([]);
+  const [subcontractors, setSubcontractors] = useState([]);
   const [manpower, setManpower] = useState({});
   const [activities, setActivities] = useState([]);
   const [dailyLog, setDailyLog] = useState([]);
@@ -487,9 +488,10 @@ export default function App() {
     (async () => {
       setDataLoading(true);
       const suf = activeProjectId;
-      const [tr, ar, mp, act, dl, dsa, pi, pl, pu, mr] = await Promise.all([
+      const [tr, ar, sc, mp, act, dl, dsa, pi, pl, pu, mr] = await Promise.all([
         safeGet(`trades-config:${suf}`),
         safeGet(`areas-config:${suf}`),
+        safeGet(`subcontractors-config:${suf}`),
         safeGet(`manpower-entries:${suf}`),
         safeGet(`activities:${suf}`),
         safeGet(`daily-log-entries:${suf}`),
@@ -507,6 +509,7 @@ export default function App() {
         if (seeded.length > 0) await safeSet(`areas-config:${suf}`, seeded, true);
       }
       setAreas(resolvedAreas);
+      setSubcontractors(sc || []);
       setManpower(mp || {});
       setActivities(act || []);
       setDailyLog(dl || []);
@@ -578,6 +581,10 @@ export default function App() {
   const saveAreas = (list) => {
     setAreas(list);
     persist(`areas-config:${activeProjectId}`, list);
+  };
+  const saveSubcontractors = (list) => {
+    setSubcontractors(list);
+    persist(`subcontractors-config:${activeProjectId}`, list);
   };
   const saveManpower = (obj) => {
     setManpower(obj);
@@ -857,7 +864,10 @@ export default function App() {
           />
         )}
         {view === 'manpower' && (
-          <ManpowerPage manpower={manpower} trades={trades} saveManpower={saveManpower} saveTrades={saveTrades} />
+          <ManpowerPage
+            manpower={manpower} trades={trades} saveManpower={saveManpower} saveTrades={saveTrades}
+            subcontractors={subcontractors} saveSubcontractors={saveSubcontractors}
+          />
         )}
         {view === 'activities' && (
           <ActivitiesPage activities={activities} saveActivities={saveActivities} trades={trades} areas={areas} saveAreas={saveAreas} />
@@ -866,6 +876,7 @@ export default function App() {
           <DailyLogPage
             activities={activities} manpower={manpower} dailyLog={dailyLog} saveDailyLog={saveDailyLog}
             subActivities={dailySubActivities} saveSubActivities={saveDailySubActivities} areas={areas}
+            subcontractors={subcontractors}
           />
         )}
         {view === 'procurement' && (
@@ -1088,24 +1099,50 @@ function ManpowerTrackerCard({ manpower }) {
 }
 
 /* ---------------- Manpower ---------------- */
-function ManpowerPage({ manpower, trades, saveManpower, saveTrades }) {
+function ManpowerPage({ manpower, trades, saveManpower, saveTrades, subcontractors, saveSubcontractors }) {
   const [date, setDate] = useState(todayStr());
-  const entry = manpower[date] || { trades: {}, notes: '' };
-  const [counts, setCounts] = useState(entry.trades || {});
-  const [notes, setNotes] = useState(entry.notes || '');
+  const [counts, setCounts] = useState({});
+  const [subBreakdown, setSubBreakdown] = useState({});
+  const [notes, setNotes] = useState('');
   const [newTrade, setNewTrade] = useState('');
+  const [newSubcontractor, setNewSubcontractor] = useState('');
+  const [expandedTrade, setExpandedTrade] = useState(null);
+  const [carriedForward, setCarriedForward] = useState(false);
 
   useEffect(() => {
-    const e = manpower[date] || { trades: {}, notes: '' };
-    setCounts(e.trades || {});
-    setNotes(e.notes || '');
+    const existing = manpower[date];
+    if (existing) {
+      setCounts(existing.trades || {});
+      setSubBreakdown(existing.subBreakdown || {});
+      setNotes(existing.notes || '');
+      setCarriedForward(false);
+    } else {
+      // No entry yet for this date — carry forward the most recent prior day's
+      // discipline/subcontractor breakdown as a starting point, so the same
+      // day-to-day composition doesn't have to be re-typed every day. Notes
+      // are day-specific and are never carried forward. Nothing is saved
+      // until the user actually hits Save.
+      const priorDates = Object.keys(manpower).filter(d => d < date).sort();
+      const priorDate = priorDates[priorDates.length - 1];
+      if (priorDate) {
+        setCounts(manpower[priorDate].trades || {});
+        setSubBreakdown(manpower[priorDate].subBreakdown || {});
+        setCarriedForward(true);
+      } else {
+        setCounts({});
+        setSubBreakdown({});
+        setCarriedForward(false);
+      }
+      setNotes('');
+    }
   }, [date, manpower]);
 
   const total = Object.values(counts).reduce((a, b) => a + Number(b || 0), 0);
 
   const handleSave = () => {
-    const updated = { ...manpower, [date]: { trades: counts, notes, updatedAt: new Date().toISOString() } };
+    const updated = { ...manpower, [date]: { trades: counts, subBreakdown, notes, updatedAt: new Date().toISOString() } };
     saveManpower(updated);
+    setCarriedForward(false);
   };
 
   const addTrade = () => {
@@ -1113,6 +1150,33 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades }) {
     if (!name || trades.includes(name)) return;
     saveTrades([...trades, name]);
     setNewTrade('');
+  };
+
+  const addSubcontractor = () => {
+    const name = newSubcontractor.trim();
+    if (!name || subcontractors.includes(name)) return;
+    saveSubcontractors([...subcontractors, name]);
+    setNewSubcontractor('');
+  };
+  const removeSubcontractor = (name) => saveSubcontractors(subcontractors.filter(s => s !== name));
+
+  const addSubRow = (trade) => {
+    setSubBreakdown(prev => ({ ...prev, [trade]: [...(prev[trade] || []), { subcontractor: '', count: '' }] }));
+    setExpandedTrade(trade);
+  };
+  const updateSubRow = (trade, idx, field, value) => {
+    setSubBreakdown(prev => {
+      const list = [...(prev[trade] || [])];
+      list[idx] = { ...list[idx], [field]: value };
+      return { ...prev, [trade]: list };
+    });
+  };
+  const removeSubRow = (trade, idx) => {
+    setSubBreakdown(prev => {
+      const list = [...(prev[trade] || [])];
+      list.splice(idx, 1);
+      return { ...prev, [trade]: list };
+    });
   };
 
   const history = useMemo(() => {
@@ -1148,13 +1212,35 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades }) {
           </button>
         </div>
 
-        <table className="w-full text-sm mb-3">
-          <tbody>
-            {trades.map(trade => (
-              <tr key={trade} className="border-b last:border-b-0 group" style={{borderColor: '#EEE8DA'}}>
-                <td className="py-2 w-1/2" style={{color: '#4A453C'}}>{trade}</td>
-                <td className="py-2">
-                  <div className="flex items-center justify-end gap-2">
+        {carriedForward && (
+          <p className="text-xs mb-3" style={{ color: '#D98E2B' }}>
+            Carried forward from the last logged day — review and adjust before saving.
+          </p>
+        )}
+
+        <div className="mb-3">
+          {trades.map(trade => {
+            const subs = subBreakdown[trade] || [];
+            const subTotal = subs.reduce((s, x) => s + Number(x.count || 0), 0);
+            const expanded = expandedTrade === trade;
+            const mismatch = subs.length > 0 && Number(counts[trade] || 0) !== subTotal;
+            return (
+              <div key={trade} className="border-b last:border-b-0" style={{ borderColor: '#EEE8DA' }}>
+                <div className="flex items-center justify-between py-2 gap-2">
+                  <button
+                    onClick={() => setExpandedTrade(expanded ? null : trade)}
+                    className="flex items-center gap-1.5 text-sm min-w-0"
+                    style={{ color: '#4A453C' }}
+                  >
+                    {expanded ? <ChevronDown size={14} style={{ color: '#8B8578' }} /> : <ChevronRight size={14} style={{ color: '#8B8578' }} />}
+                    <span className="truncate">{trade}</span>
+                    {subs.length > 0 && (
+                      <span className="text-xs whitespace-nowrap" style={{ color: '#8B8578' }}>
+                        ({subs.length} subcontractor{subs.length === 1 ? '' : 's'})
+                      </span>
+                    )}
+                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
                     <input
                       type="number"
                       min="0"
@@ -1169,11 +1255,49 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades }) {
                       onClick={() => saveTrades(trades.filter(t => t !== trade))}
                     />
                   </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </div>
+                {expanded && (
+                  <div className="pb-3 pl-5 space-y-2">
+                    {mismatch && (
+                      <p className="text-xs" style={{ color: '#D98E2B' }}>
+                        Subcontractor breakdown totals {subTotal}, discipline total is {counts[trade] || 0} — this is informational only and isn't auto-matched.
+                      </p>
+                    )}
+                    {subs.length === 0 && (
+                      <p className="text-xs" style={{ color: '#8B8578' }}>No subcontractor breakdown for this discipline yet — optional.</p>
+                    )}
+                    {subs.map((s, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <select
+                          value={s.subcontractor}
+                          onChange={(e) => updateSubRow(trade, i, 'subcontractor', e.target.value)}
+                          className="flex-1 border rounded-sm px-2 py-1 text-xs bg-white" style={{ borderColor: '#D9D2C2' }}
+                        >
+                          <option value="">Select subcontractor</option>
+                          {subcontractors.map(sc => <option key={sc} value={sc}>{sc}</option>)}
+                        </select>
+                        <input
+                          type="number" min="0"
+                          value={s.count}
+                          onChange={(e) => updateSubRow(trade, i, 'count', e.target.value)}
+                          className="w-20 border rounded-sm px-2 py-1 text-xs text-right" style={{ borderColor: '#D9D2C2' }}
+                        />
+                        <X size={12} className="cursor-pointer" style={{ color: '#8B8578' }} onClick={() => removeSubRow(trade, i)} />
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => addSubRow(trade)}
+                      className="flex items-center gap-1 text-xs border px-2 py-1 rounded-sm"
+                      style={{ color: '#3D6178', borderColor: '#3D6178' }}
+                    >
+                      <Plus size={12} /> Add subcontractor
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
 
         <div className="flex items-center gap-2 mb-4">
           <input
@@ -1203,6 +1327,40 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades }) {
         >
           <Save size={14} /> Save entry
         </button>
+      </div>
+
+      <div className="tracker-card bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
+        <h2 className="text-lg font-semibold mb-3" style={{ fontFamily: "'Barlow Condensed', sans-serif" }}>Subcontractors</h2>
+        <p className="text-xs mb-3" style={{ color: '#8B8578' }}>
+          Manage the list of subcontractors available for the breakdown above, and on Daily Log entries and sub-activities.
+        </p>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {subcontractors.length === 0 && (
+            <p className="text-xs" style={{ color: '#8B8578' }}>None added yet.</p>
+          )}
+          {subcontractors.map(sc => (
+            <span
+              key={sc}
+              className="flex items-center gap-1.5 text-xs border rounded-sm px-2 py-1"
+              style={{ borderColor: '#D9D2C2', color: '#4A453C' }}
+            >
+              {sc}
+              <X size={11} className="cursor-pointer" style={{ color: '#B7ADA0' }} onClick={() => removeSubcontractor(sc)} />
+            </span>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            value={newSubcontractor}
+            onChange={(e) => setNewSubcontractor(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addSubcontractor()}
+            placeholder="Add a subcontractor"
+            className="border rounded-sm px-2 py-1.5 text-sm flex-1 max-w-xs" style={{ borderColor: '#D9D2C2' }}
+          />
+          <button onClick={addSubcontractor} className="flex items-center gap-1 text-sm border rounded-sm px-2 py-1.5" style={{ color: '#3D6178', borderColor: '#3D6178' }}>
+            <Plus size={14} /> Add
+          </button>
+        </div>
       </div>
 
       <div className="tracker-card bg-white border rounded-sm p-4" style={{borderColor: '#D9D2C2'}}>
@@ -1606,7 +1764,7 @@ function ActivitiesPage({ activities, saveActivities, trades, areas, saveAreas }
 }
 
 /* ---------------- Daily Activity Tracker ---------------- */
-const emptyLogForm = { date: todayStr(), activityId: '', plannedQty: '', actualQty: '', manpower: '' };
+const emptyLogForm = { date: todayStr(), activityId: '', plannedQty: '', actualQty: '', manpower: '', subcontractor: '' };
 
 function dayTotalForDiscipline(manpower, date, discipline) {
   if (!discipline) return null;
@@ -1615,9 +1773,9 @@ function dayTotalForDiscipline(manpower, date, discipline) {
   return Number(entry.trades?.[discipline] || 0);
 }
 
-const emptySubForm = { description: '', manpower: '', plannedQty: '', uom: '', actualQty: '' };
+const emptySubForm = { description: '', manpower: '', plannedQty: '', uom: '', actualQty: '', subcontractor: '' };
 
-function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivities, saveSubActivities, areas }) {
+function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivities, saveSubActivities, areas, subcontractors }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyLogForm);
@@ -1655,7 +1813,7 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
   };
 
   const startEdit = (e) => {
-    setForm({ date: e.date, activityId: e.activityId, plannedQty: e.plannedQty ?? '', actualQty: e.actualQty ?? '', manpower: e.manpower ?? '' });
+    setForm({ date: e.date, activityId: e.activityId, plannedQty: e.plannedQty ?? '', actualQty: e.actualQty ?? '', manpower: e.manpower ?? '', subcontractor: e.subcontractor || '' });
     setEditingId(e.id);
     setShowForm(true);
   };
@@ -1695,6 +1853,7 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
     setSubForm({
       description: s.description || '', manpower: s.manpower ?? '',
       plannedQty: s.plannedQty ?? '', uom: s.uom || '', actualQty: s.actualQty ?? '',
+      subcontractor: s.subcontractor || '',
     });
     setEditingSubId(s.id);
     setSubFormEntryId(s.entryId);
@@ -1816,6 +1975,18 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
             ) : null}
           </div>
 
+          <div>
+            <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Subcontractor (optional)</label>
+            <select
+              value={form.subcontractor}
+              onChange={(e) => setForm({ ...form, subcontractor: e.target.value })}
+              className="w-full border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
+            >
+              <option value="">Not specified</option>
+              {subcontractors.map(sc => <option key={sc} value={sc}>{sc}</option>)}
+            </select>
+          </div>
+
           <div className="flex gap-2">
             <button
               onClick={handleSubmit}
@@ -1863,6 +2034,7 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
                         {fmtDate(e.date)} · Planned {e.plannedQty || 0} · Actual {e.actualQty || 0}
                         <span style={{ color: variance >= 0 ? '#4F7C52' : '#B5482F' }}> ({variance > 0 ? '+' : ''}{variance})</span>
                         {' · '}Manpower {entryManpower}
+                        {e.subcontractor && <> · {e.subcontractor}</>}
                         {entrySubs.length > 0 && <> · Sub-activities: {subTotal}/{entryManpower}</>}
                       </p>
                     </div>
@@ -1883,7 +2055,9 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
                       <div key={s.id} className="flex items-start justify-between gap-2 bg-white border rounded-sm p-2" style={{ borderColor: '#EEE8DA' }}>
                         <div className="min-w-0">
                           <p className="text-xs">{s.description}</p>
-                          <p className="text-xs" style={{ color: '#8B8578' }}>Manpower: {s.manpower || 0}</p>
+                          <p className="text-xs" style={{ color: '#8B8578' }}>
+                            Manpower: {s.manpower || 0}{s.subcontractor && <> · {s.subcontractor}</>}
+                          </p>
                           {(s.plannedQty !== '' && s.plannedQty != null) || (s.actualQty !== '' && s.actualQty != null) ? (
                             <p className="text-xs" style={{ color: '#8B8578' }}>
                               Qty: {s.plannedQty || 0} planned · {s.actualQty || 0} actual{s.uom ? ` (${s.uom})` : ''}
@@ -1944,6 +2118,14 @@ function DailyLogPage({ activities, manpower, dailyLog, saveDailyLog, subActivit
                         <p className="text-xs" style={{ color: '#8B8578' }}>
                           Qty and UOM here are just for tracking this sub-activity — independent of the parent activity's own quantities/unit.
                         </p>
+                        <select
+                          value={subForm.subcontractor}
+                          onChange={(ev) => setSubForm({ ...subForm, subcontractor: ev.target.value })}
+                          className="w-full border rounded-sm px-2 py-1.5 text-xs bg-white" style={{ borderColor: '#D9D2C2' }}
+                        >
+                          <option value="">Subcontractor (optional)</option>
+                          {subcontractors.map(sc => <option key={sc} value={sc}>{sc}</option>)}
+                        </select>
                         <div className="flex gap-2">
                           <button
                             onClick={() => submitSub(e)}
