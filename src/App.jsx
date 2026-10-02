@@ -88,16 +88,27 @@ function findValue(row, aliases) {
 function toDateStr(v) {
   if (!v) return '';
   if (v instanceof Date && !isNaN(v.getTime())) {
-    // Excel/SheetJS date cells come through as Date objects built from local
-    // calendar components — reading them back via getFullYear/getMonth/getDate
-    // (not toISOString, which converts through UTC first) avoids shifting the
-    // date by a day in timezones ahead of UTC.
+    // Excel/SheetJS date cells come through as Date objects built so that
+    // local calendar getters give the correct day (this matches SheetJS's
+    // own documented behavior) — reading them back via getFullYear/getMonth/
+    // getDate (not toISOString, which converts through UTC first) avoids
+    // shifting the date by a day in timezones ahead of UTC.
     const y = v.getFullYear();
     const m = String(v.getMonth() + 1).padStart(2, '0');
     const day = String(v.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   }
-  const d = new Date(String(v).trim());
+  const s = String(v).trim();
+  // If the cell came through as plain text rather than a real Excel date
+  // (e.g. typed as "2026-09-01"), pull the calendar digits out directly
+  // rather than routing through new Date(...).toISOString(), which is where
+  // the same timezone-shift bug would otherwise sneak back in for text cells.
+  const isoMatch = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (isoMatch) {
+    const [, y, m, day] = isoMatch;
+    return `${y}-${m.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  const d = new Date(s);
   return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
 }
 function rowToActivity(row) {
@@ -1137,10 +1148,21 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades, subcontracto
     }
   }, [date, manpower]);
 
-  const total = Object.values(counts).reduce((a, b) => a + Number(b || 0), 0);
+  // A discipline's total is manually entered UNTIL at least one subcontractor
+  // row exists for it — from that point on, the total is derived from the
+  // subcontractor breakdown and is no longer independently editable.
+  const effectiveCount = (trade) => {
+    const subs = subBreakdown[trade] || [];
+    if (subs.length > 0) return subs.reduce((s, x) => s + Number(x.count || 0), 0);
+    return Number(counts[trade] || 0);
+  };
+
+  const total = trades.reduce((sum, t) => sum + effectiveCount(t), 0);
 
   const handleSave = () => {
-    const updated = { ...manpower, [date]: { trades: counts, subBreakdown, notes, updatedAt: new Date().toISOString() } };
+    const finalTrades = {};
+    trades.forEach(t => { finalTrades[t] = effectiveCount(t); });
+    const updated = { ...manpower, [date]: { trades: finalTrades, subBreakdown, notes, updatedAt: new Date().toISOString() } };
     saveManpower(updated);
     setCarriedForward(false);
   };
@@ -1175,6 +1197,13 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades, subcontracto
     setSubBreakdown(prev => {
       const list = [...(prev[trade] || [])];
       list.splice(idx, 1);
+      if (list.length === 0) {
+        // No subcontractor rows left — hand the last computed total back to
+        // the manual field instead of reverting to whatever stale value was
+        // there before the breakdown existed.
+        const priorTotal = (prev[trade] || []).reduce((s, x) => s + Number(x.count || 0), 0);
+        setCounts(c => ({ ...c, [trade]: priorTotal }));
+      }
       return { ...prev, [trade]: list };
     });
   };
@@ -1223,7 +1252,7 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades, subcontracto
             const subs = subBreakdown[trade] || [];
             const subTotal = subs.reduce((s, x) => s + Number(x.count || 0), 0);
             const expanded = expandedTrade === trade;
-            const mismatch = subs.length > 0 && Number(counts[trade] || 0) !== subTotal;
+            const hasSubs = subs.length > 0;
             return (
               <div key={trade} className="border-b last:border-b-0" style={{ borderColor: '#EEE8DA' }}>
                 <div className="flex items-center justify-between py-2 gap-2">
@@ -1234,7 +1263,7 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades, subcontracto
                   >
                     {expanded ? <ChevronDown size={14} style={{ color: '#8B8578' }} /> : <ChevronRight size={14} style={{ color: '#8B8578' }} />}
                     <span className="truncate">{trade}</span>
-                    {subs.length > 0 && (
+                    {hasSubs && (
                       <span className="text-xs whitespace-nowrap" style={{ color: '#8B8578' }}>
                         ({subs.length} subcontractor{subs.length === 1 ? '' : 's'})
                       </span>
@@ -1244,10 +1273,13 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades, subcontracto
                     <input
                       type="number"
                       min="0"
-                      value={counts[trade] ?? ''}
+                      value={hasSubs ? subTotal : (counts[trade] ?? '')}
                       placeholder="0"
+                      disabled={hasSubs}
                       onChange={(e) => setCounts({ ...counts, [trade]: e.target.value })}
-                      className="w-24 border rounded-sm px-2 py-1 text-right" style={{borderColor: '#D9D2C2'}}
+                      className="w-24 border rounded-sm px-2 py-1 text-right"
+                      style={{ borderColor: '#D9D2C2', backgroundColor: hasSubs ? '#F1EDE4' : 'white', color: hasSubs ? '#8B8578' : '#2A2620' }}
+                      title={hasSubs ? 'Auto-computed from the subcontractor breakdown below' : undefined}
                     />
                     <Trash2
                       size={14}
@@ -1258,13 +1290,12 @@ function ManpowerPage({ manpower, trades, saveManpower, saveTrades, subcontracto
                 </div>
                 {expanded && (
                   <div className="pb-3 pl-5 space-y-2">
-                    {mismatch && (
-                      <p className="text-xs" style={{ color: '#D98E2B' }}>
-                        Subcontractor breakdown totals {subTotal}, discipline total is {counts[trade] || 0} — this is informational only and isn't auto-matched.
+                    {hasSubs ? (
+                      <p className="text-xs" style={{ color: '#8B8578' }}>
+                        Discipline total is auto-computed as the sum of the subcontractor counts below ({subTotal}). Remove all subcontractor rows to enter the total manually again.
                       </p>
-                    )}
-                    {subs.length === 0 && (
-                      <p className="text-xs" style={{ color: '#8B8578' }}>No subcontractor breakdown for this discipline yet — optional.</p>
+                    ) : (
+                      <p className="text-xs" style={{ color: '#8B8578' }}>No subcontractor breakdown for this discipline yet — optional. Add one below and the discipline total will be computed from it automatically.</p>
                     )}
                     {subs.map((s, i) => (
                       <div key={i} className="flex items-center gap-2">
