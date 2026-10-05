@@ -908,7 +908,7 @@ export default function App() {
           />
         )}
         {view === 'timeline' && (
-          <TimelinePage activities={activities} procItems={procItems} procLots={procLots} />
+          <TimelinePage activities={activities} procItems={procItems} procLots={procLots} areas={areas} trades={trades} />
         )}
         {view === 'admin' && profile?.is_admin && (
           <AdminPage currentUserId={session.user.id} />
@@ -1446,6 +1446,8 @@ const emptyForm = {
 function ActivitiesPage({ activities, saveActivities, trades, areas, saveAreas }) {
   const [filter, setFilter] = useState('All');
   const [areaFilter, setAreaFilter] = useState('All');
+  const [disciplineFilter, setDisciplineFilter] = useState('All');
+  const [searchQuery, setSearchQuery] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
@@ -1495,12 +1497,19 @@ function ActivitiesPage({ activities, saveActivities, trades, areas, saveAreas }
     if (areaFilter !== 'All') {
       list = list.filter(a => (a.area || 'Unassigned') === areaFilter);
     }
+    if (disciplineFilter !== 'All') {
+      list = list.filter(a => (a.category || 'Unassigned') === disciplineFilter);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      list = list.filter(a => a.name.toLowerCase().includes(q));
+    }
     return list.sort((a, b) => {
       if (!a.plannedEnd) return 1;
       if (!b.plannedEnd) return -1;
       return a.plannedEnd < b.plannedEnd ? -1 : 1;
     });
-  }, [activities, filter, areaFilter]);
+  }, [activities, filter, areaFilter, disciplineFilter, searchQuery]);
 
   const counts = useMemo(() => {
     const c = { All: activities.length };
@@ -1586,28 +1595,64 @@ function ActivitiesPage({ activities, saveActivities, trades, areas, saveAreas }
         </div>
       </div>
 
-      <div className="flex items-center gap-1 flex-wrap">
-        <span className="text-xs mr-1" style={{ color: '#8B8578' }}>Area:</span>
-        {['All', ...areas].map(ar => (
-          <button
-            key={ar}
-            onClick={() => setAreaFilter(ar)}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-sm whitespace-nowrap border"
-            style={{
-              background: areaFilter === ar ? '#3D6178' : 'white',
-              color: areaFilter === ar ? 'white' : '#4A453C',
-              borderColor: areaFilter === ar ? '#3D6178' : '#D9D2C2',
-            }}
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Area</label>
+          <select
+            value={areaFilter}
+            onChange={(e) => setAreaFilter(e.target.value)}
+            className="border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
           >
-            <span onClick={() => setAreaFilter(ar)}>{ar}</span>
-            {ar !== 'All' && (
-              <X
-                size={11}
-                onClick={(ev) => { ev.stopPropagation(); removeArea(ar); }}
-                style={{ color: areaFilter === ar ? '#F1EDE4' : '#B7ADA0' }}
-              />
-            )}
+            <option value="All">All areas</option>
+            {areas.map(ar => <option key={ar} value={ar}>{ar}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Discipline</label>
+          <select
+            value={disciplineFilter}
+            onChange={(e) => setDisciplineFilter(e.target.value)}
+            className="border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
+          >
+            <option value="All">All disciplines</option>
+            {trades.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div className="flex-1" style={{ minWidth: 160 }}>
+          <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Search</label>
+          <input
+            list="activity-name-suggestions"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search activity description..."
+            className="w-full border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }}
+          />
+          <datalist id="activity-name-suggestions">
+            {Array.from(new Set(activities.map(a => a.name))).map(n => <option key={n} value={n} />)}
+          </datalist>
+        </div>
+        {(areaFilter !== 'All' || disciplineFilter !== 'All' || searchQuery) && (
+          <button
+            onClick={() => { setAreaFilter('All'); setDisciplineFilter('All'); setSearchQuery(''); }}
+            className="text-xs underline" style={{ color: '#3D6178' }}
+          >
+            Clear filters
           </button>
+        )}
+      </div>
+
+      <div className="flex items-center gap-1 flex-wrap">
+        <span className="text-xs mr-1" style={{ color: '#8B8578' }}>Manage areas:</span>
+        {areas.length === 0 && <span className="text-xs" style={{ color: '#8B8578' }}>None added yet.</span>}
+        {areas.map(ar => (
+          <span
+            key={ar}
+            className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-sm border"
+            style={{ borderColor: '#D9D2C2', color: '#4A453C' }}
+          >
+            {ar}
+            <X size={11} className="cursor-pointer" style={{ color: '#B7ADA0' }} onClick={() => removeArea(ar)} />
+          </span>
         ))}
         <input
           placeholder="Add area"
@@ -3166,13 +3211,44 @@ function InsightsPage({ projectName, activities, manpower, dailyLog, procItems, 
 function laterOf(a, b) { if (!a) return b; if (!b) return a; return a > b ? a : b; }
 function earlierOf(a, b) { if (!a) return b; if (!b) return a; return a < b ? a : b; }
 
-function TimelinePage({ activities, procItems, procLots }) {
+function TimelinePage({ activities, procItems, procLots, areas, trades }) {
   const [cursor, setCursor] = useState(() => {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() };
   });
   const [subView, setSubView] = useState('activities');
   const [selectedStages, setSelectedStages] = useState(PROC_STAGES.map(s => s.key));
+  const [filter, setFilter] = useState('All');
+  const [areaFilter, setAreaFilter] = useState('All');
+  const [disciplineFilter, setDisciplineFilter] = useState('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [startFrom, setStartFrom] = useState('');
+  const [startTo, setStartTo] = useState('');
+  const [finishFrom, setFinishFrom] = useState('');
+  const [finishTo, setFinishTo] = useState('');
+
+  const filteredActivities = useMemo(() => {
+    let list = [...activities];
+    if (filter !== 'All') list = list.filter(a => scheduleCategory(a) === filter);
+    if (areaFilter !== 'All') list = list.filter(a => (a.area || 'Unassigned') === areaFilter);
+    if (disciplineFilter !== 'All') list = list.filter(a => (a.category || 'Unassigned') === disciplineFilter);
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      list = list.filter(a => a.name.toLowerCase().includes(q));
+    }
+    if (startFrom) list = list.filter(a => a.plannedStart && a.plannedStart >= startFrom);
+    if (startTo) list = list.filter(a => a.plannedStart && a.plannedStart <= startTo);
+    if (finishFrom) list = list.filter(a => a.plannedEnd && a.plannedEnd >= finishFrom);
+    if (finishTo) list = list.filter(a => a.plannedEnd && a.plannedEnd <= finishTo);
+    return list;
+  }, [activities, filter, areaFilter, disciplineFilter, searchQuery, startFrom, startTo, finishFrom, finishTo]);
+
+  const hasActiveFilters = filter !== 'All' || areaFilter !== 'All' || disciplineFilter !== 'All'
+    || searchQuery || startFrom || startTo || finishFrom || finishTo;
+  const clearAllFilters = () => {
+    setFilter('All'); setAreaFilter('All'); setDisciplineFilter('All'); setSearchQuery('');
+    setStartFrom(''); setStartTo(''); setFinishFrom(''); setFinishTo('');
+  };
 
   const toggleStage = (key) => {
     setSelectedStages(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
@@ -3199,7 +3275,7 @@ function TimelinePage({ activities, procItems, procLots }) {
   };
 
   const rows = useMemo(() => {
-    return activities.map(a => {
+    return filteredActivities.map(a => {
       const plannedBar = monthOverlap(a.plannedStart, a.plannedEnd);
       const actualEndForBar = a.actualEnd || (a.actualStart && !isDone(a) ? today : a.actualStart);
       const onTimeEnd = earlierOf(actualEndForBar, a.plannedEnd) || actualEndForBar;
@@ -3214,9 +3290,9 @@ function TimelinePage({ activities, procItems, procLots }) {
       const visible = plannedBar || onTimeBar || delayBar || notStartedDelayBar;
       return { a, plannedBar, onTimeBar, delayBar, notStartedDelayBar, delayDays, pct, visible };
     }).filter(r => r.visible);
-  }, [activities, cursor, today]);
+  }, [filteredActivities, cursor, today]);
 
-  const unscheduled = activities.filter(a => !a.plannedStart || !a.plannedEnd);
+  const unscheduled = filteredActivities.filter(a => !a.plannedStart || !a.plannedEnd);
 
   const procRows = useMemo(() => {
     return procLots.map(lot => {
@@ -3301,10 +3377,97 @@ function TimelinePage({ activities, procItems, procLots }) {
       )}
 
       {subView === 'activities' && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-1">
+            {['All', ...CATEGORY_LIST].map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className="px-2.5 py-1 text-xs rounded-sm whitespace-nowrap border"
+                style={{
+                  background: filter === f ? '#1C2733' : 'white',
+                  color: filter === f ? 'white' : '#4A453C',
+                  borderColor: filter === f ? '#1C2733' : '#D9D2C2',
+                }}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Area</label>
+              <select
+                value={areaFilter}
+                onChange={(e) => setAreaFilter(e.target.value)}
+                className="border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
+              >
+                <option value="All">All areas</option>
+                {areas.map(ar => <option key={ar} value={ar}>{ar}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Discipline</label>
+              <select
+                value={disciplineFilter}
+                onChange={(e) => setDisciplineFilter(e.target.value)}
+                className="border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
+              >
+                <option value="All">All disciplines</option>
+                {trades.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="flex-1" style={{ minWidth: 160 }}>
+              <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Search</label>
+              <input
+                list="timeline-activity-suggestions"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search activity description..."
+                className="w-full border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }}
+              />
+              <datalist id="timeline-activity-suggestions">
+                {Array.from(new Set(activities.map(a => a.name))).map(n => <option key={n} value={n} />)}
+              </datalist>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex items-end gap-2">
+              <div>
+                <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Planned start from</label>
+                <input type="date" value={startFrom} onChange={(e) => setStartFrom(e.target.value)} className="border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }} />
+              </div>
+              <div>
+                <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>to</label>
+                <input type="date" value={startTo} onChange={(e) => setStartTo(e.target.value)} className="border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }} />
+              </div>
+            </div>
+            <div className="flex items-end gap-2">
+              <div>
+                <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Planned finish from</label>
+                <input type="date" value={finishFrom} onChange={(e) => setFinishFrom(e.target.value)} className="border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }} />
+              </div>
+              <div>
+                <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>to</label>
+                <input type="date" value={finishTo} onChange={(e) => setFinishTo(e.target.value)} className="border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }} />
+              </div>
+            </div>
+            {hasActiveFilters && (
+              <button onClick={clearAllFilters} className="text-xs underline" style={{ color: '#3D6178' }}>
+                Clear filters
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {subView === 'activities' && (
       <>
       {rows.length === 0 ? (
         <div className="tracker-card bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
-          <p className="text-sm" style={{ color: '#8B8578' }}>No activities scheduled within {monthLabel}.</p>
+          <p className="text-sm" style={{ color: '#8B8578' }}>
+            {hasActiveFilters ? 'No activities match the current filters within ' : 'No activities scheduled within '}{monthLabel}.
+          </p>
         </div>
       ) : (
         <div className="tracker-card bg-white border rounded-sm overflow-hidden flex" style={{ borderColor: '#D9D2C2' }}>
