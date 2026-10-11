@@ -85,17 +85,37 @@ function findValue(row, aliases) {
   }
   return '';
 }
+function excelSerialToDateStr(serial) {
+  // Excel's day-0 epoch is Dec 30 1899 (this compensates for Excel's
+  // historical 1900-leap-year bug) — verified directly against this app's
+  // own import template: serial 46296 -> 2026-10-01, serial 46305 ->
+  // 2026-10-10. Pure local-calendar arithmetic, no timezone involved.
+  const epoch = new Date(1899, 11, 30);
+  epoch.setDate(epoch.getDate() + Math.round(serial));
+  const y = epoch.getFullYear();
+  const m = String(epoch.getMonth() + 1).padStart(2, '0');
+  const d = String(epoch.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function toDateStr(v) {
-  if (!v) return '';
+  if (v === '' || v === null || v === undefined) return '';
+  if (typeof v === 'number' && !isNaN(v)) {
+    // A raw Excel serial date number. This is the normal path for imports now
+    // that the file is read without cellDates (see handleImportFile), and it
+    // involves no timezone math at all.
+    return v > 0 ? excelSerialToDateStr(v) : '';
+  }
   if (v instanceof Date && !isNaN(v.getTime())) {
-    // Excel/SheetJS date cells come through as Date objects built so that
-    // local calendar getters give the correct day (this matches SheetJS's
-    // own documented behavior) — reading them back via getFullYear/getMonth/
-    // getDate (not toISOString, which converts through UTC first) avoids
-    // shifting the date by a day in timezones ahead of UTC.
-    const y = v.getFullYear();
-    const m = String(v.getMonth() + 1).padStart(2, '0');
-    const day = String(v.getDate()).padStart(2, '0');
+    // Defensive only — Date objects shouldn't reach here for Excel imports any
+    // more. If one does, SheetJS-built dates can sit seconds BEFORE local
+    // midnight in some timezones (e.g. 23:59:50 the previous day in India),
+    // so nudge forward an hour before reading the local calendar day. Safe for
+    // date-only values, which are all this app stores.
+    const t = new Date(v.getTime() + 60 * 60 * 1000);
+    const y = t.getFullYear();
+    const m = String(t.getMonth() + 1).padStart(2, '0');
+    const day = String(t.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   }
   const s = String(v).trim();
@@ -1472,7 +1492,13 @@ function ActivitiesPage({ activities, saveActivities, trades, areas, saveAreas }
     try {
       const XLSX = await import('xlsx');
       const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+      // Deliberately NOT using cellDates: true. With it, SheetJS builds JS Date
+      // objects using a timezone correction that is off by ~10 seconds in some
+      // zones (e.g. Asia/Kolkata, due to a rounded 1899 offset), which lands
+      // the date on 23:59:50 of the PREVIOUS day. Reading raw serial numbers
+      // and converting them ourselves (excelSerialToDateStr) avoids timezone
+      // math entirely.
+      const wb = XLSX.read(buf, { type: 'array' });
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const parsed = rows.map(rowToActivity).filter(a => a.name);
