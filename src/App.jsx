@@ -886,6 +886,7 @@ export default function App() {
           <Dashboard
             manpower={manpower}
             trades={trades}
+            subcontractors={subcontractors}
             activities={activities}
             overdueCount={overdueCount}
             pendingCount={pendingCount}
@@ -939,7 +940,7 @@ export default function App() {
 }
 
 /* ---------------- Dashboard ---------------- */
-function Dashboard({ manpower, trades, activities, overdueCount, pendingCount, progressCount, completedCount, goTo }) {
+function Dashboard({ manpower, trades, subcontractors, activities, overdueCount, pendingCount, progressCount, completedCount, goTo }) {
   const today = todayStr();
   const todayEntry = manpower[today];
   const todayTotal = todayEntry ? Object.values(todayEntry.trades || {}).reduce((a, b) => a + Number(b || 0), 0) : 0;
@@ -1004,22 +1005,64 @@ function Dashboard({ manpower, trades, activities, overdueCount, pendingCount, p
         </div>
       </div>
 
-      <ManpowerTrackerCard manpower={manpower} />
+      <ManpowerTrackerCard manpower={manpower} trades={trades} subcontractors={subcontractors} />
     </div>
   );
 }
 
 /* ---------------- Manpower tracker (dashboard) ---------------- */
-function ManpowerTrackerCard({ manpower }) {
+// Headcount for one logged day, optionally narrowed to a discipline and/or a
+// subcontractor ('All' means no narrowing). With a subcontractor selected, only
+// manpower attributed to that subcontractor in the discipline breakdowns counts —
+// disciplines logged without a breakdown contribute nothing in that case.
+function manpowerForDay(entry, disciplineFilter, subcontractorFilter) {
+  if (!entry) return 0;
+  const trades = entry.trades || {};
+  const breakdown = entry.subBreakdown || {};
+  if (subcontractorFilter === 'All') {
+    if (disciplineFilter === 'All') return Object.values(trades).reduce((a, b) => a + Number(b || 0), 0);
+    return Number(trades[disciplineFilter] || 0);
+  }
+  const disciplines = disciplineFilter === 'All' ? Object.keys(breakdown) : [disciplineFilter];
+  return disciplines.reduce((sum, disc) => {
+    const rows = (breakdown[disc] || []).filter(r => r.subcontractor === subcontractorFilter);
+    return sum + rows.reduce((s, r) => s + Number(r.count || 0), 0);
+  }, 0);
+}
+
+function ManpowerTrackerCard({ manpower, trades = [], subcontractors = [] }) {
   const [mode, setMode] = useState('daily');
+  const [disciplineFilter, setDisciplineFilter] = useState('All');
+  const [subcontractorFilter, setSubcontractorFilter] = useState('All');
+
+  // Options: the project's managed lists, plus anything that appears in logged
+  // data (so older entries for since-removed disciplines/subcontractors stay filterable).
+  const disciplineOptions = useMemo(() => {
+    const set = new Set(trades);
+    Object.values(manpower).forEach(e => Object.keys(e.trades || {}).forEach(k => set.add(k)));
+    return Array.from(set);
+  }, [trades, manpower]);
+  const subcontractorOptions = useMemo(() => {
+    const set = new Set(subcontractors);
+    Object.values(manpower).forEach(e => Object.values(e.subBreakdown || {}).forEach(list => {
+      (list || []).forEach(r => { if (r.subcontractor) set.add(r.subcontractor); });
+    }));
+    return Array.from(set);
+  }, [subcontractors, manpower]);
+
+  // If the selected option no longer exists (e.g. after switching projects), fall back to All.
+  useEffect(() => {
+    if (disciplineFilter !== 'All' && !disciplineOptions.includes(disciplineFilter)) setDisciplineFilter('All');
+    if (subcontractorFilter !== 'All' && !subcontractorOptions.includes(subcontractorFilter)) setSubcontractorFilter('All');
+  }, [disciplineOptions, subcontractorOptions, disciplineFilter, subcontractorFilter]);
 
   const dailyData = useMemo(() => {
     return Object.keys(manpower).sort().map(d => ({
       date: d,
       label: fmtDateShort(d),
-      total: Object.values(manpower[d].trades || {}).reduce((a, b) => a + Number(b || 0), 0),
+      total: manpowerForDay(manpower[d], disciplineFilter, subcontractorFilter),
     }));
-  }, [manpower]);
+  }, [manpower, disciplineFilter, subcontractorFilter]);
 
   const monthlyData = useMemo(() => {
     const byMonth = {};
@@ -1070,6 +1113,44 @@ function ManpowerTrackerCard({ manpower }) {
           ))}
         </div>
       </div>
+
+      <div className="flex flex-wrap items-end gap-3 mb-3">
+        <div>
+          <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Discipline</label>
+          <select
+            value={disciplineFilter}
+            onChange={(e) => setDisciplineFilter(e.target.value)}
+            className="border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
+          >
+            <option value="All">All disciplines</option>
+            {disciplineOptions.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Subcontractor</label>
+          <select
+            value={subcontractorFilter}
+            onChange={(e) => setSubcontractorFilter(e.target.value)}
+            className="border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
+          >
+            <option value="All">All subcontractors</option>
+            {subcontractorOptions.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        {(disciplineFilter !== 'All' || subcontractorFilter !== 'All') && (
+          <button
+            onClick={() => { setDisciplineFilter('All'); setSubcontractorFilter('All'); }}
+            className="text-xs underline" style={{ color: '#3D6178' }}
+          >
+            Reset filters
+          </button>
+        )}
+      </div>
+      {subcontractorFilter !== 'All' && (
+        <p className="text-xs mb-3" style={{ color: '#8B8578' }}>
+          Counts only manpower recorded against {subcontractorFilter} in the Manpower tab's subcontractor breakdown.
+        </p>
+      )}
 
       {levels.length === 0 ? (
         <p className="text-sm" style={{color: '#8B8578'}}>No manpower entries logged yet.</p>
