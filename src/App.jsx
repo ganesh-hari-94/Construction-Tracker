@@ -1030,25 +1030,50 @@ function manpowerForDay(entry, disciplineFilter, subcontractorFilter) {
   }, 0);
 }
 
+// Options for the dashboard's Discipline and Subcontractor dropdowns. The two
+// depend on each other: picking a discipline narrows the subcontractors to those
+// with manpower recorded under it, and picking a subcontractor narrows the
+// disciplines to those it has worked in. With neither picked, everything is offered
+// (the project's managed lists plus anything found in logged data).
+function manpowerFilterOptions(manpower, trades, subcontractors, disciplineFilter, subcontractorFilter) {
+  const allDisciplines = new Set(trades);
+  const allSubcontractors = new Set(subcontractors);
+  const pairs = []; // [discipline, subcontractor] combinations that have manpower recorded
+  Object.values(manpower).forEach(entry => {
+    Object.keys(entry.trades || {}).forEach(d => allDisciplines.add(d));
+    Object.entries(entry.subBreakdown || {}).forEach(([disc, rows]) => {
+      allDisciplines.add(disc);
+      (rows || []).forEach(r => {
+        if (!r.subcontractor) return;
+        allSubcontractors.add(r.subcontractor);
+        if (Number(r.count || 0) > 0) pairs.push([disc, r.subcontractor]);
+      });
+    });
+  });
+  let disciplineOptions = Array.from(allDisciplines);
+  let subcontractorOptions = Array.from(allSubcontractors);
+  if (subcontractorFilter !== 'All') {
+    const ok = new Set(pairs.filter(([, s]) => s === subcontractorFilter).map(([d]) => d));
+    disciplineOptions = disciplineOptions.filter(d => ok.has(d));
+  }
+  if (disciplineFilter !== 'All') {
+    const ok = new Set(pairs.filter(([d]) => d === disciplineFilter).map(([, s]) => s));
+    subcontractorOptions = subcontractorOptions.filter(s => ok.has(s));
+  }
+  return { disciplineOptions, subcontractorOptions };
+}
+
 function ManpowerTrackerCard({ manpower, trades = [], subcontractors = [] }) {
   const [mode, setMode] = useState('daily');
   const [disciplineFilter, setDisciplineFilter] = useState('All');
   const [subcontractorFilter, setSubcontractorFilter] = useState('All');
 
-  // Options: the project's managed lists, plus anything that appears in logged
-  // data (so older entries for since-removed disciplines/subcontractors stay filterable).
-  const disciplineOptions = useMemo(() => {
-    const set = new Set(trades);
-    Object.values(manpower).forEach(e => Object.keys(e.trades || {}).forEach(k => set.add(k)));
-    return Array.from(set);
-  }, [trades, manpower]);
-  const subcontractorOptions = useMemo(() => {
-    const set = new Set(subcontractors);
-    Object.values(manpower).forEach(e => Object.values(e.subBreakdown || {}).forEach(list => {
-      (list || []).forEach(r => { if (r.subcontractor) set.add(r.subcontractor); });
-    }));
-    return Array.from(set);
-  }, [subcontractors, manpower]);
+  // Cascading options: each dropdown only offers values that exist together with the
+  // other dropdown's current selection (see manpowerFilterOptions).
+  const { disciplineOptions, subcontractorOptions } = useMemo(
+    () => manpowerFilterOptions(manpower, trades, subcontractors, disciplineFilter, subcontractorFilter),
+    [manpower, trades, subcontractors, disciplineFilter, subcontractorFilter]
+  );
 
   // If the selected option no longer exists (e.g. after switching projects), fall back to All.
   useEffect(() => {
@@ -1131,6 +1156,7 @@ function ManpowerTrackerCard({ manpower, trades = [], subcontractors = [] }) {
           <select
             value={subcontractorFilter}
             onChange={(e) => setSubcontractorFilter(e.target.value)}
+            disabled={subcontractorOptions.length === 0}
             className="border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
           >
             <option value="All">All subcontractors</option>
@@ -1149,6 +1175,11 @@ function ManpowerTrackerCard({ manpower, trades = [], subcontractors = [] }) {
       {subcontractorFilter !== 'All' && (
         <p className="text-xs mb-3" style={{ color: '#8B8578' }}>
           Counts only manpower recorded against {subcontractorFilter} in the Manpower tab's subcontractor breakdown.
+        </p>
+      )}
+      {disciplineFilter !== 'All' && subcontractorOptions.length === 0 && (
+        <p className="text-xs mb-3" style={{ color: '#8B8578' }}>
+          No subcontractor breakdown has been recorded under {disciplineFilter}, so there's nothing to filter by here.
         </p>
       )}
 
