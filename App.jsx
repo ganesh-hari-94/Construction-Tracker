@@ -15,8 +15,14 @@ const STATUS_COLORS = { Pending: '#3D6178', 'In Progress': '#D98E2B', Completed:
 const PRIORITY_COLORS = { High: '#B5482F', Medium: '#D98E2B', Low: '#70796E' };
 
 function todayStr() {
+  // Local calendar date. Deliberately NOT toISOString(), which is UTC and runs a
+  // day behind for part of every day in timezones ahead of UTC (e.g. India
+  // between midnight and 5:30am).
   const d = new Date();
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 function fmtDate(s) {
   if (!s) return '—';
@@ -35,8 +41,21 @@ function daysBetween(a, b) {
 function isDone(activity) {
   return activity.status === 'Completed' || !!activity.actualEnd;
 }
+// Which kind of overdue an activity is in, if any (never once it's done):
+//  - 'notStarted': no actual start, and today is past the planned start
+//    (falls back to the planned finish if no planned start was entered)
+//  - 'delayed': started but not finished, and today is past the planned finish
+function overdueKind(activity) {
+  if (isDone(activity)) return null;
+  const today = todayStr();
+  if (!activity.actualStart) {
+    const mustHaveStartedBy = activity.plannedStart || activity.plannedEnd;
+    return mustHaveStartedBy && today > mustHaveStartedBy ? 'notStarted' : null;
+  }
+  return activity.plannedEnd && today > activity.plannedEnd ? 'delayed' : null;
+}
 function isOverdue(activity) {
-  return activity.plannedEnd && !isDone(activity) && activity.plannedEnd < todayStr();
+  return overdueKind(activity) !== null;
 }
 function displayStatus(activity) {
   return isOverdue(activity) ? 'Overdue' : activity.status;
@@ -50,6 +69,7 @@ function percentComplete(a) {
 }
 
 const CATEGORY_COLORS = {
+  'Not yet started': '#70796E',
   'Planned and progressing as per plan': '#3D6178',
   'Completed as per Plan': '#4F7C52',
   'Completed with delay': '#8A7F3D',
@@ -59,18 +79,18 @@ const CATEGORY_COLORS = {
 const CATEGORY_LIST = Object.keys(CATEGORY_COLORS);
 
 function scheduleCategory(a) {
-  const today = todayStr();
   if (isDone(a)) {
     if (a.actualEnd && a.plannedEnd) {
       return a.actualEnd > a.plannedEnd ? 'Completed with delay' : 'Completed as per Plan';
     }
     return 'Completed as per Plan';
   }
-  const overdue = a.plannedEnd && a.plannedEnd < today;
-  if (overdue) {
-    return a.actualStart ? 'Overdue with delay' : 'Overdue not started';
-  }
-  return 'Planned and progressing as per plan';
+  const kind = overdueKind(a);
+  if (kind === 'notStarted') return 'Overdue not started';
+  if (kind === 'delayed') return 'Overdue with delay';
+  // Not overdue: an activity with an actual start is progressing per plan;
+  // one without hasn't kicked off yet (and isn't past its planned start).
+  return a.actualStart ? 'Planned and progressing as per plan' : 'Not yet started';
 }
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -85,17 +105,37 @@ function findValue(row, aliases) {
   }
   return '';
 }
+function excelSerialToDateStr(serial) {
+  // Excel's day-0 epoch is Dec 30 1899 (this compensates for Excel's
+  // historical 1900-leap-year bug) — verified directly against this app's
+  // own import template: serial 46296 -> 2026-10-01, serial 46305 ->
+  // 2026-10-10. Pure local-calendar arithmetic, no timezone involved.
+  const epoch = new Date(1899, 11, 30);
+  epoch.setDate(epoch.getDate() + Math.round(serial));
+  const y = epoch.getFullYear();
+  const m = String(epoch.getMonth() + 1).padStart(2, '0');
+  const d = String(epoch.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function toDateStr(v) {
-  if (!v) return '';
+  if (v === '' || v === null || v === undefined) return '';
+  if (typeof v === 'number' && !isNaN(v)) {
+    // A raw Excel serial date number. This is the normal path for imports now
+    // that the file is read without cellDates (see handleImportFile), and it
+    // involves no timezone math at all.
+    return v > 0 ? excelSerialToDateStr(v) : '';
+  }
   if (v instanceof Date && !isNaN(v.getTime())) {
-    // Excel/SheetJS date cells come through as Date objects built so that
-    // local calendar getters give the correct day (this matches SheetJS's
-    // own documented behavior) — reading them back via getFullYear/getMonth/
-    // getDate (not toISOString, which converts through UTC first) avoids
-    // shifting the date by a day in timezones ahead of UTC.
-    const y = v.getFullYear();
-    const m = String(v.getMonth() + 1).padStart(2, '0');
-    const day = String(v.getDate()).padStart(2, '0');
+    // Defensive only — Date objects shouldn't reach here for Excel imports any
+    // more. If one does, SheetJS-built dates can sit seconds BEFORE local
+    // midnight in some timezones (e.g. 23:59:50 the previous day in India),
+    // so nudge forward an hour before reading the local calendar day. Safe for
+    // date-only values, which are all this app stores.
+    const t = new Date(v.getTime() + 60 * 60 * 1000);
+    const y = t.getFullYear();
+    const m = String(t.getMonth() + 1).padStart(2, '0');
+    const day = String(t.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   }
   const s = String(v).trim();
@@ -866,6 +906,7 @@ export default function App() {
           <Dashboard
             manpower={manpower}
             trades={trades}
+            subcontractors={subcontractors}
             activities={activities}
             overdueCount={overdueCount}
             pendingCount={pendingCount}
@@ -908,7 +949,7 @@ export default function App() {
           />
         )}
         {view === 'timeline' && (
-          <TimelinePage activities={activities} procItems={procItems} procLots={procLots} />
+          <TimelinePage activities={activities} procItems={procItems} procLots={procLots} areas={areas} trades={trades} />
         )}
         {view === 'admin' && profile?.is_admin && (
           <AdminPage currentUserId={session.user.id} />
@@ -919,7 +960,7 @@ export default function App() {
 }
 
 /* ---------------- Dashboard ---------------- */
-function Dashboard({ manpower, trades, activities, overdueCount, pendingCount, progressCount, completedCount, goTo }) {
+function Dashboard({ manpower, trades, subcontractors, activities, overdueCount, pendingCount, progressCount, completedCount, goTo }) {
   const today = todayStr();
   const todayEntry = manpower[today];
   const todayTotal = todayEntry ? Object.values(todayEntry.trades || {}).reduce((a, b) => a + Number(b || 0), 0) : 0;
@@ -984,22 +1025,89 @@ function Dashboard({ manpower, trades, activities, overdueCount, pendingCount, p
         </div>
       </div>
 
-      <ManpowerTrackerCard manpower={manpower} />
+      <ManpowerTrackerCard manpower={manpower} trades={trades} subcontractors={subcontractors} />
     </div>
   );
 }
 
 /* ---------------- Manpower tracker (dashboard) ---------------- */
-function ManpowerTrackerCard({ manpower }) {
+// Headcount for one logged day, optionally narrowed to a discipline and/or a
+// subcontractor ('All' means no narrowing). With a subcontractor selected, only
+// manpower attributed to that subcontractor in the discipline breakdowns counts —
+// disciplines logged without a breakdown contribute nothing in that case.
+function manpowerForDay(entry, disciplineFilter, subcontractorFilter) {
+  if (!entry) return 0;
+  const trades = entry.trades || {};
+  const breakdown = entry.subBreakdown || {};
+  if (subcontractorFilter === 'All') {
+    if (disciplineFilter === 'All') return Object.values(trades).reduce((a, b) => a + Number(b || 0), 0);
+    return Number(trades[disciplineFilter] || 0);
+  }
+  const disciplines = disciplineFilter === 'All' ? Object.keys(breakdown) : [disciplineFilter];
+  return disciplines.reduce((sum, disc) => {
+    const rows = (breakdown[disc] || []).filter(r => r.subcontractor === subcontractorFilter);
+    return sum + rows.reduce((s, r) => s + Number(r.count || 0), 0);
+  }, 0);
+}
+
+// Options for the dashboard's Discipline and Subcontractor dropdowns. The two
+// depend on each other: picking a discipline narrows the subcontractors to those
+// with manpower recorded under it, and picking a subcontractor narrows the
+// disciplines to those it has worked in. With neither picked, everything is offered
+// (the project's managed lists plus anything found in logged data).
+function manpowerFilterOptions(manpower, trades, subcontractors, disciplineFilter, subcontractorFilter) {
+  const allDisciplines = new Set(trades);
+  const allSubcontractors = new Set(subcontractors);
+  const pairs = []; // [discipline, subcontractor] combinations that have manpower recorded
+  Object.values(manpower).forEach(entry => {
+    Object.keys(entry.trades || {}).forEach(d => allDisciplines.add(d));
+    Object.entries(entry.subBreakdown || {}).forEach(([disc, rows]) => {
+      allDisciplines.add(disc);
+      (rows || []).forEach(r => {
+        if (!r.subcontractor) return;
+        allSubcontractors.add(r.subcontractor);
+        if (Number(r.count || 0) > 0) pairs.push([disc, r.subcontractor]);
+      });
+    });
+  });
+  let disciplineOptions = Array.from(allDisciplines);
+  let subcontractorOptions = Array.from(allSubcontractors);
+  if (subcontractorFilter !== 'All') {
+    const ok = new Set(pairs.filter(([, s]) => s === subcontractorFilter).map(([d]) => d));
+    disciplineOptions = disciplineOptions.filter(d => ok.has(d));
+  }
+  if (disciplineFilter !== 'All') {
+    const ok = new Set(pairs.filter(([d]) => d === disciplineFilter).map(([, s]) => s));
+    subcontractorOptions = subcontractorOptions.filter(s => ok.has(s));
+  }
+  return { disciplineOptions, subcontractorOptions };
+}
+
+function ManpowerTrackerCard({ manpower, trades = [], subcontractors = [] }) {
   const [mode, setMode] = useState('daily');
+  const [disciplineFilter, setDisciplineFilter] = useState('All');
+  const [subcontractorFilter, setSubcontractorFilter] = useState('All');
+
+  // Cascading options: each dropdown only offers values that exist together with the
+  // other dropdown's current selection (see manpowerFilterOptions).
+  const { disciplineOptions, subcontractorOptions } = useMemo(
+    () => manpowerFilterOptions(manpower, trades, subcontractors, disciplineFilter, subcontractorFilter),
+    [manpower, trades, subcontractors, disciplineFilter, subcontractorFilter]
+  );
+
+  // If the selected option no longer exists (e.g. after switching projects), fall back to All.
+  useEffect(() => {
+    if (disciplineFilter !== 'All' && !disciplineOptions.includes(disciplineFilter)) setDisciplineFilter('All');
+    if (subcontractorFilter !== 'All' && !subcontractorOptions.includes(subcontractorFilter)) setSubcontractorFilter('All');
+  }, [disciplineOptions, subcontractorOptions, disciplineFilter, subcontractorFilter]);
 
   const dailyData = useMemo(() => {
     return Object.keys(manpower).sort().map(d => ({
       date: d,
       label: fmtDateShort(d),
-      total: Object.values(manpower[d].trades || {}).reduce((a, b) => a + Number(b || 0), 0),
+      total: manpowerForDay(manpower[d], disciplineFilter, subcontractorFilter),
     }));
-  }, [manpower]);
+  }, [manpower, disciplineFilter, subcontractorFilter]);
 
   const monthlyData = useMemo(() => {
     const byMonth = {};
@@ -1050,6 +1158,50 @@ function ManpowerTrackerCard({ manpower }) {
           ))}
         </div>
       </div>
+
+      <div className="flex flex-wrap items-end gap-3 mb-3">
+        <div>
+          <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Discipline</label>
+          <select
+            value={disciplineFilter}
+            onChange={(e) => setDisciplineFilter(e.target.value)}
+            className="border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
+          >
+            <option value="All">All disciplines</option>
+            {disciplineOptions.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Subcontractor</label>
+          <select
+            value={subcontractorFilter}
+            onChange={(e) => setSubcontractorFilter(e.target.value)}
+            disabled={subcontractorOptions.length === 0}
+            className="border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
+          >
+            <option value="All">All subcontractors</option>
+            {subcontractorOptions.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        {(disciplineFilter !== 'All' || subcontractorFilter !== 'All') && (
+          <button
+            onClick={() => { setDisciplineFilter('All'); setSubcontractorFilter('All'); }}
+            className="text-xs underline" style={{ color: '#3D6178' }}
+          >
+            Reset filters
+          </button>
+        )}
+      </div>
+      {subcontractorFilter !== 'All' && (
+        <p className="text-xs mb-3" style={{ color: '#8B8578' }}>
+          Counts only manpower recorded against {subcontractorFilter} in the Manpower tab's subcontractor breakdown.
+        </p>
+      )}
+      {disciplineFilter !== 'All' && subcontractorOptions.length === 0 && (
+        <p className="text-xs mb-3" style={{ color: '#8B8578' }}>
+          No subcontractor breakdown has been recorded under {disciplineFilter}, so there's nothing to filter by here.
+        </p>
+      )}
 
       {levels.length === 0 ? (
         <p className="text-sm" style={{color: '#8B8578'}}>No manpower entries logged yet.</p>
@@ -1472,7 +1624,13 @@ function ActivitiesPage({ activities, saveActivities, trades, areas, saveAreas }
     try {
       const XLSX = await import('xlsx');
       const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+      // Deliberately NOT using cellDates: true. With it, SheetJS builds JS Date
+      // objects using a timezone correction that is off by ~10 seconds in some
+      // zones (e.g. Asia/Kolkata, due to a rounded 1899 offset), which lands
+      // the date on 23:59:50 of the PREVIOUS day. Reading raw serial numbers
+      // and converting them ourselves (excelSerialToDateStr) avoids timezone
+      // math entirely.
+      const wb = XLSX.read(buf, { type: 'array' });
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const parsed = rows.map(rowToActivity).filter(a => a.name);
@@ -3211,13 +3369,44 @@ function InsightsPage({ projectName, activities, manpower, dailyLog, procItems, 
 function laterOf(a, b) { if (!a) return b; if (!b) return a; return a > b ? a : b; }
 function earlierOf(a, b) { if (!a) return b; if (!b) return a; return a < b ? a : b; }
 
-function TimelinePage({ activities, procItems, procLots }) {
+function TimelinePage({ activities, procItems, procLots, areas, trades }) {
   const [cursor, setCursor] = useState(() => {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() };
   });
   const [subView, setSubView] = useState('activities');
   const [selectedStages, setSelectedStages] = useState(PROC_STAGES.map(s => s.key));
+  const [filter, setFilter] = useState('All');
+  const [areaFilter, setAreaFilter] = useState('All');
+  const [disciplineFilter, setDisciplineFilter] = useState('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [startFrom, setStartFrom] = useState('');
+  const [startTo, setStartTo] = useState('');
+  const [finishFrom, setFinishFrom] = useState('');
+  const [finishTo, setFinishTo] = useState('');
+
+  const filteredActivities = useMemo(() => {
+    let list = [...activities];
+    if (filter !== 'All') list = list.filter(a => scheduleCategory(a) === filter);
+    if (areaFilter !== 'All') list = list.filter(a => (a.area || 'Unassigned') === areaFilter);
+    if (disciplineFilter !== 'All') list = list.filter(a => (a.category || 'Unassigned') === disciplineFilter);
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      list = list.filter(a => a.name.toLowerCase().includes(q));
+    }
+    if (startFrom) list = list.filter(a => a.plannedStart && a.plannedStart >= startFrom);
+    if (startTo) list = list.filter(a => a.plannedStart && a.plannedStart <= startTo);
+    if (finishFrom) list = list.filter(a => a.plannedEnd && a.plannedEnd >= finishFrom);
+    if (finishTo) list = list.filter(a => a.plannedEnd && a.plannedEnd <= finishTo);
+    return list;
+  }, [activities, filter, areaFilter, disciplineFilter, searchQuery, startFrom, startTo, finishFrom, finishTo]);
+
+  const hasActiveFilters = filter !== 'All' || areaFilter !== 'All' || disciplineFilter !== 'All'
+    || searchQuery || startFrom || startTo || finishFrom || finishTo;
+  const clearAllFilters = () => {
+    setFilter('All'); setAreaFilter('All'); setDisciplineFilter('All'); setSearchQuery('');
+    setStartFrom(''); setStartTo(''); setFinishFrom(''); setFinishTo('');
+  };
 
   const toggleStage = (key) => {
     setSelectedStages(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
@@ -3244,24 +3433,27 @@ function TimelinePage({ activities, procItems, procLots }) {
   };
 
   const rows = useMemo(() => {
-    return activities.map(a => {
+    return filteredActivities.map(a => {
       const plannedBar = monthOverlap(a.plannedStart, a.plannedEnd);
       const actualEndForBar = a.actualEnd || (a.actualStart && !isDone(a) ? today : a.actualStart);
       const onTimeEnd = earlierOf(actualEndForBar, a.plannedEnd) || actualEndForBar;
       const onTimeBar = a.actualStart ? monthOverlap(a.actualStart, onTimeEnd) : null;
       const hasDateDelay = a.plannedEnd && actualEndForBar && actualEndForBar > a.plannedEnd;
       const delayBar = hasDateDelay ? monthOverlap(laterOf(a.plannedEnd, a.actualStart), actualEndForBar) : null;
-      const notStartedDelayBar = (!a.actualStart && isOverdue(a)) ? monthOverlap(a.plannedEnd, today) : null;
+      const kind = overdueKind(a);
+      // Not started and past its planned start: hatch from the planned start to today.
+      const notStartedDelayBar = kind === 'notStarted' ? monthOverlap(a.plannedStart || a.plannedEnd, today) : null;
       const delayDays = a.actualEnd && a.plannedEnd && a.actualEnd > a.plannedEnd
         ? daysBetween(a.plannedEnd, a.actualEnd)
-        : (!a.actualEnd && a.plannedEnd && isOverdue(a) ? daysBetween(a.plannedEnd, today) : 0);
+        : (kind === 'notStarted' ? daysBetween(a.plannedStart || a.plannedEnd, today)
+          : (kind === 'delayed' ? daysBetween(a.plannedEnd, today) : 0));
       const pct = percentComplete(a);
       const visible = plannedBar || onTimeBar || delayBar || notStartedDelayBar;
       return { a, plannedBar, onTimeBar, delayBar, notStartedDelayBar, delayDays, pct, visible };
     }).filter(r => r.visible);
-  }, [activities, cursor, today]);
+  }, [filteredActivities, cursor, today]);
 
-  const unscheduled = activities.filter(a => !a.plannedStart || !a.plannedEnd);
+  const unscheduled = filteredActivities.filter(a => !a.plannedStart || !a.plannedEnd);
 
   const procRows = useMemo(() => {
     return procLots.map(lot => {
@@ -3346,10 +3538,97 @@ function TimelinePage({ activities, procItems, procLots }) {
       )}
 
       {subView === 'activities' && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-1">
+            {['All', ...CATEGORY_LIST].map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className="px-2.5 py-1 text-xs rounded-sm whitespace-nowrap border"
+                style={{
+                  background: filter === f ? '#1C2733' : 'white',
+                  color: filter === f ? 'white' : '#4A453C',
+                  borderColor: filter === f ? '#1C2733' : '#D9D2C2',
+                }}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Area</label>
+              <select
+                value={areaFilter}
+                onChange={(e) => setAreaFilter(e.target.value)}
+                className="border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
+              >
+                <option value="All">All areas</option>
+                {areas.map(ar => <option key={ar} value={ar}>{ar}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Discipline</label>
+              <select
+                value={disciplineFilter}
+                onChange={(e) => setDisciplineFilter(e.target.value)}
+                className="border rounded-sm px-2 py-1.5 text-sm bg-white" style={{ borderColor: '#D9D2C2' }}
+              >
+                <option value="All">All disciplines</option>
+                {trades.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="flex-1" style={{ minWidth: 160 }}>
+              <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Search</label>
+              <input
+                list="timeline-activity-suggestions"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search activity description..."
+                className="w-full border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }}
+              />
+              <datalist id="timeline-activity-suggestions">
+                {Array.from(new Set(activities.map(a => a.name))).map(n => <option key={n} value={n} />)}
+              </datalist>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex items-end gap-2">
+              <div>
+                <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Planned start from</label>
+                <input type="date" value={startFrom} onChange={(e) => setStartFrom(e.target.value)} className="border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }} />
+              </div>
+              <div>
+                <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>to</label>
+                <input type="date" value={startTo} onChange={(e) => setStartTo(e.target.value)} className="border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }} />
+              </div>
+            </div>
+            <div className="flex items-end gap-2">
+              <div>
+                <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>Planned finish from</label>
+                <input type="date" value={finishFrom} onChange={(e) => setFinishFrom(e.target.value)} className="border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }} />
+              </div>
+              <div>
+                <label className="block text-xs mb-1" style={{ color: '#8B8578' }}>to</label>
+                <input type="date" value={finishTo} onChange={(e) => setFinishTo(e.target.value)} className="border rounded-sm px-2 py-1.5 text-sm" style={{ borderColor: '#D9D2C2' }} />
+              </div>
+            </div>
+            {hasActiveFilters && (
+              <button onClick={clearAllFilters} className="text-xs underline" style={{ color: '#3D6178' }}>
+                Clear filters
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {subView === 'activities' && (
       <>
       {rows.length === 0 ? (
         <div className="tracker-card bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
-          <p className="text-sm" style={{ color: '#8B8578' }}>No activities scheduled within {monthLabel}.</p>
+          <p className="text-sm" style={{ color: '#8B8578' }}>
+            {hasActiveFilters ? 'No activities match the current filters within ' : 'No activities scheduled within '}{monthLabel}.
+          </p>
         </div>
       ) : (
         <div className="tracker-card bg-white border rounded-sm overflow-hidden flex" style={{ borderColor: '#D9D2C2' }}>
