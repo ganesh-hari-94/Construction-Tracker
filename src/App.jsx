@@ -3,7 +3,7 @@ import { supabase } from './supabaseClient';
 import {
   LayoutDashboard, Users, ClipboardList, CalendarDays, Plus, Trash2,
   Pencil, Check, X, AlertTriangle, ChevronLeft, ChevronRight, Loader2,
-  ChevronDown, Save, ListChecks, Package, FileText, Sparkles
+  ChevronDown, Save, ListChecks, Package, FileText, Download, Printer, Sparkles
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell
@@ -15,8 +15,14 @@ const STATUS_COLORS = { Pending: '#3D6178', 'In Progress': '#D98E2B', Completed:
 const PRIORITY_COLORS = { High: '#B5482F', Medium: '#D98E2B', Low: '#70796E' };
 
 function todayStr() {
+  // Local calendar date. Deliberately NOT toISOString(), which is UTC and runs a
+  // day behind for part of every day in timezones ahead of UTC (e.g. India
+  // between midnight and 5:30am).
   const d = new Date();
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 function fmtDate(s) {
   if (!s) return '—';
@@ -35,8 +41,21 @@ function daysBetween(a, b) {
 function isDone(activity) {
   return activity.status === 'Completed' || !!activity.actualEnd;
 }
+// Which kind of overdue an activity is in, if any (never once it's done):
+//  - 'notStarted': no actual start, and today is past the planned start
+//    (falls back to the planned finish if no planned start was entered)
+//  - 'delayed': started but not finished, and today is past the planned finish
+function overdueKind(activity) {
+  if (isDone(activity)) return null;
+  const today = todayStr();
+  if (!activity.actualStart) {
+    const mustHaveStartedBy = activity.plannedStart || activity.plannedEnd;
+    return mustHaveStartedBy && today > mustHaveStartedBy ? 'notStarted' : null;
+  }
+  return activity.plannedEnd && today > activity.plannedEnd ? 'delayed' : null;
+}
 function isOverdue(activity) {
-  return activity.plannedEnd && !isDone(activity) && activity.plannedEnd < todayStr();
+  return overdueKind(activity) !== null;
 }
 function displayStatus(activity) {
   return isOverdue(activity) ? 'Overdue' : activity.status;
@@ -50,6 +69,7 @@ function percentComplete(a) {
 }
 
 const CATEGORY_COLORS = {
+  'Not yet started': '#70796E',
   'Planned and progressing as per plan': '#3D6178',
   'Completed as per Plan': '#4F7C52',
   'Completed with delay': '#8A7F3D',
@@ -59,18 +79,18 @@ const CATEGORY_COLORS = {
 const CATEGORY_LIST = Object.keys(CATEGORY_COLORS);
 
 function scheduleCategory(a) {
-  const today = todayStr();
   if (isDone(a)) {
     if (a.actualEnd && a.plannedEnd) {
       return a.actualEnd > a.plannedEnd ? 'Completed with delay' : 'Completed as per Plan';
     }
     return 'Completed as per Plan';
   }
-  const overdue = a.plannedEnd && a.plannedEnd < today;
-  if (overdue) {
-    return a.actualStart ? 'Overdue with delay' : 'Overdue not started';
-  }
-  return 'Planned and progressing as per plan';
+  const kind = overdueKind(a);
+  if (kind === 'notStarted') return 'Overdue not started';
+  if (kind === 'delayed') return 'Overdue with delay';
+  // Not overdue: an activity with an actual start is progressing per plan;
+  // one without hasn't kicked off yet (and isn't past its planned start).
+  return a.actualStart ? 'Planned and progressing as per plan' : 'Not yet started';
 }
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -856,6 +876,7 @@ export default function App() {
           { id: 'dailylog', label: 'Daily Log', icon: ListChecks },
           { id: 'procurement', label: 'Procurement', icon: Package },
           { id: 'mom', label: 'MOM / Notes', icon: FileText },
+          { id: 'reports', label: 'Reports', icon: Download },
           { id: 'insights', label: 'Insights', icon: Sparkles },
           { id: 'timeline', label: 'Timeline', icon: CalendarDays },
         ].map(t => {
@@ -924,8 +945,16 @@ export default function App() {
         {view === 'insights' && (
           <InsightsPage
             projectName={activeProject?.name}
-            activities={activities} manpower={manpower} dailyLog={dailyLog}
-            procItems={procItems} procLots={procLots} momRecords={momRecords}
+            activities={activities} manpower={manpower} dailyLog={dailyLog} subActivities={dailySubActivities}
+            procItems={procItems} procLots={procLots} procUpdates={procUpdates} momRecords={momRecords}
+            trades={trades} areas={areas} subcontractors={subcontractors}
+          />
+        )}
+        {view === 'reports' && (
+          <ReportsPage
+            projectName={activeProject?.name}
+            activities={activities} manpower={manpower} trades={trades}
+            procItems={procItems} procLots={procLots} procUpdates={procUpdates}
           />
         )}
         {view === 'timeline' && (
@@ -3159,92 +3188,218 @@ function AdminPage({ currentUserId }) {
 }
 
 /* ---------------- Insights (AI) ---------------- */
-function buildProjectContext({ projectName, activities, manpower, dailyLog, procItems, procLots, momRecords }) {
+// How much project data is sent to the AI with each question. At roughly 4
+// characters per token, 600,000 characters is about 150K tokens: well inside the
+// model's context window, and enough for roughly 2,000 daily-log entries (about
+// 200 characters each) plus everything else. Bigger requests answer more slowly and
+// count more against free-tier token limits (check your quota in AI Studio). If a
+// project's full data is bigger than this, the OLDEST daily-log and manpower history
+// is dropped first (activities, procurement and everything else is always sent in
+// full) and the Insights tab says so.
+const MAX_CONTEXT_CHARS = 600000;
+
+const AI_DATA_GUIDE = `You are an assistant answering questions about ONE construction project. Below is that project's COMPLETE data model as JSON (unless a NOTE says older history was left out). Use only this data. If something is not in it, say so instead of guessing.
+
+How to answer:
+- Be complete and specific. When asked for a list (overdue activities, delayed lots, who was on site, and so on), list every matching item with its key details rather than summarising or giving examples.
+- Count by going through the lists carefully. The "summary" section has pre-computed counts you can rely on.
+- Dates are YYYY-MM-DD. "today" is given in the data.
+
+Data model:
+- summary: pre-computed counts and totals.
+- disciplines, areas, subcontractors: the project's configured lists.
+- activities: one per activity. status is one of: Not yet started (no actual start, planned start not yet passed); Planned and progressing as per plan (started, not finished, planned finish not yet passed); Completed as per Plan; Completed with delay (finished after the planned finish); Overdue not started (no actual start and today is past the planned start); Overdue with delay (started, not finished, and today is past the planned finish). totalScope and balanceScope are quantities in the activity's own unit; percentComplete = (totalScope - balanceScope) / totalScope. balanceScope falls automatically as actual quantities are logged in the daily log. delayDays is how many days late, when late.
+- manpowerByDay: headcount on site for each logged day: total, byDiscipline (a discipline not listed had nobody that day), and bySubcontractor (per discipline, only where a subcontractor breakdown was entered; when present it adds up to that discipline's headcount).
+- dailyProgressLog: one entry per activity per day, with the plannedQty and actualQty for that day (in the activity's unit), manpower engaged, an optional subcontractor, and nested subActivities. A sub-activity has its own manpower, plannedQty, actualQty and uom; these are for tracking only and are NOT linked to the parent activity's quantities or unit.
+- procurement: items, each with its lots. A lot has a quantity, supplier location, a status, expected and actual dates for orderPlacement, inspection, dispatch and delivery, and dated progress updates.
+- meetingRecords: minutes-of-meeting files on record (date, description, file name). The contents of those files are NOT included.`;
+
+// Builds the text sent to the AI: the guide above plus the project's complete data
+// model as compact JSON. Returns { text, stats } where stats describes what was sent.
+function buildProjectContext(project, opts = {}) {
+  const maxChars = opts.maxChars || MAX_CONTEXT_CHARS;
+  const {
+    projectName, activities = [], manpower = {}, dailyLog = [], subActivities = [],
+    procItems = [], procLots = [], procUpdates = [], momRecords = [],
+    trades = [], areas = [], subcontractors = [],
+  } = project;
   const today = todayStr();
-  const lines = [];
-  lines.push(`Project: ${projectName || 'Untitled'}`);
-  lines.push(`Today's date: ${today}`);
+  const num = (v) => (v === '' || v === null || v === undefined || isNaN(Number(v)) ? undefined : Number(v));
+  // Drop empty values so the JSON stays small.
+  const compact = (o) => {
+    const out = {};
+    Object.entries(o).forEach(([k, v]) => {
+      if (v === '' || v === null || v === undefined) return;
+      if (Array.isArray(v) && v.length === 0) return;
+      if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) return;
+      out[k] = v;
+    });
+    return out;
+  };
+  const byDate = (x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0);
 
-  // Activities
-  lines.push('', `## Activities (${activities.length} total)`);
-  const catCounts = {};
-  activities.forEach(a => { const c = scheduleCategory(a); catCounts[c] = (catCounts[c] || 0) + 1; });
-  Object.entries(catCounts).forEach(([label, n]) => lines.push(`- ${label}: ${n}`));
-  const overdue = activities
-    .filter(a => scheduleCategory(a).startsWith('Overdue'))
-    .map(a => {
-      const days = a.plannedEnd ? daysBetween(a.plannedEnd, today) : 0;
-      return `${a.name}${a.area ? ` (${a.area})` : ''} — ${days > 0 ? days + 'd overdue' : 'overdue'}${a.category ? `, ${a.category}` : ''}`;
-    })
-    .slice(0, 12);
-  if (overdue.length) lines.push('Overdue activities:', ...overdue.map(o => `- ${o}`));
-  const withScope = activities.filter(a => a.totalScope && Number(a.totalScope) > 0);
-  if (withScope.length) {
-    const avgPct = withScope.reduce((sum, a) => sum + (percentComplete(a) || 0), 0) / withScope.length;
-    lines.push(`Average completion across activities with scope tracked: ${Math.round(avgPct)}%`);
-  }
+  // ---- Activities
+  const statusCounts = {};
+  const actModel = activities.map(a => {
+    const status = scheduleCategory(a);
+    statusCounts[status] = (statusCounts[status] || 0) + 1;
+    const kind = overdueKind(a);
+    const delayDays = a.actualEnd && a.plannedEnd && a.actualEnd > a.plannedEnd ? daysBetween(a.plannedEnd, a.actualEnd)
+      : kind === 'notStarted' ? daysBetween(a.plannedStart || a.plannedEnd, today)
+      : kind === 'delayed' ? daysBetween(a.plannedEnd, today) : 0;
+    return compact({
+      name: a.name, discipline: a.category, area: a.area, priority: a.priority, status,
+      plannedStart: a.plannedStart, plannedEnd: a.plannedEnd, actualStart: a.actualStart, actualEnd: a.actualEnd,
+      totalScope: num(a.totalScope), balanceScope: num(a.balanceScope), unit: a.unit,
+      percentComplete: percentComplete(a) ?? undefined, delayDays: delayDays > 0 ? delayDays : undefined,
+      assignedTo: a.assignedTo, notes: a.notes,
+    });
+  });
 
-  // Manpower
-  lines.push('', '## Manpower');
-  const todayMp = manpower[today];
-  if (todayMp) {
-    const total = Object.values(todayMp.trades || {}).reduce((s, v) => s + Number(v || 0), 0);
-    const byDiscipline = Object.entries(todayMp.trades || {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => `${k}: ${v}`).join(', ');
-    lines.push(`Today's total manpower: ${total}${byDiscipline ? ` (${byDiscipline})` : ''}`);
-  } else {
-    lines.push('No manpower entry logged for today.');
-  }
-  const recentDates = Object.keys(manpower).sort().slice(-7);
-  if (recentDates.length) {
-    const trend = recentDates.map(d => {
-      const t = Object.values(manpower[d].trades || {}).reduce((s, v) => s + Number(v || 0), 0);
-      return `${d}: ${t}`;
-    }).join(', ');
-    lines.push(`Last ${recentDates.length} days manpower trend: ${trend}`);
-  }
+  // ---- Manpower, one record per logged day
+  const mpFull = Object.keys(manpower).sort().map(date => {
+    const e = manpower[date] || {};
+    const byDiscipline = {};
+    let total = 0;
+    Object.entries(e.trades || {}).forEach(([d, v]) => {
+      const n = Number(v || 0);
+      total += n;
+      if (n > 0) byDiscipline[d] = n;
+    });
+    const bySubcontractor = {};
+    Object.entries(e.subBreakdown || {}).forEach(([d, rows]) => {
+      (rows || []).forEach(r => {
+        const n = Number(r.count || 0);
+        if (!r.subcontractor || n <= 0) return;
+        bySubcontractor[d] = bySubcontractor[d] || {};
+        bySubcontractor[d][r.subcontractor] = (bySubcontractor[d][r.subcontractor] || 0) + n;
+      });
+    });
+    return compact({ date, total, byDiscipline, bySubcontractor, notes: e.notes });
+  });
 
-  // Daily log
-  lines.push('', '## Daily progress log');
-  const last7 = [...dailyLog].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 20);
-  if (last7.length) {
-    const plannedSum = last7.reduce((s, e) => s + Number(e.plannedQty || 0), 0);
-    const actualSum = last7.reduce((s, e) => s + Number(e.actualQty || 0), 0);
-    lines.push(`Most recent ${last7.length} daily entries: planned qty total ${plannedSum}, actual qty total ${actualSum} (variance ${actualSum - plannedSum}).`);
-  } else {
-    lines.push('No daily log entries yet.');
-  }
+  // ---- Daily progress log, with sub-activities nested under their entry
+  const actById = Object.fromEntries(activities.map(a => [a.id, a]));
+  const subsByEntry = {};
+  subActivities.forEach(s => { (subsByEntry[s.entryId] = subsByEntry[s.entryId] || []).push(s); });
+  const logFull = [...dailyLog].sort(byDate).map(e => {
+    const a = actById[e.activityId];
+    const subs = (subsByEntry[e.id] || []).map(s => compact({
+      description: s.description, manpower: num(s.manpower), plannedQty: num(s.plannedQty),
+      actualQty: num(s.actualQty), uom: s.uom, subcontractor: s.subcontractor,
+    }));
+    return compact({
+      date: e.date, activity: a ? a.name : '(deleted activity)', discipline: a && a.category, area: a && a.area,
+      plannedQty: num(e.plannedQty), actualQty: num(e.actualQty), unit: a && a.unit, manpower: num(e.manpower),
+      subcontractor: e.subcontractor, subActivities: subs,
+    });
+  });
 
-  // Procurement
-  lines.push('', `## Procurement (${procItems.length} items, ${procLots.length} lots)`);
+  // ---- Procurement: items > lots > updates
+  const updatesByLot = {};
+  procUpdates.forEach(u => { (updatesByLot[u.lotId] = updatesByLot[u.lotId] || []).push(u); });
+  const lotsByItem = {};
+  procLots.forEach(l => { (lotsByItem[l.itemId] = lotsByItem[l.itemId] || []).push(l); });
   const lotStatusCounts = {};
-  procLots.forEach(l => { const s = lotStatus(l).label; lotStatusCounts[s] = (lotStatusCounts[s] || 0) + 1; });
-  Object.entries(lotStatusCounts).forEach(([label, n]) => lines.push(`- ${label}: ${n}`));
-  const delayedLots = procLots
-    .filter(l => lotStatus(l).label.includes('overdue') || lotStatus(l).label.includes('delayed'))
-    .map(l => {
-      const item = procItems.find(i => i.id === l.itemId);
-      return `${item ? item.name : 'Unknown item'} — Lot ${l.lotNo} (${lotStatus(l).label})`;
-    })
-    .slice(0, 10);
-  if (delayedLots.length) lines.push('Delayed/overdue lots:', ...delayedLots.map(d => `- ${d}`));
+  const procurement = procItems.map(item => compact({
+    name: item.name, discipline: item.discipline, supplier: item.supplier,
+    lots: (lotsByItem[item.id] || []).map(lot => {
+      const st = lotStatus(lot).label;
+      lotStatusCounts[st] = (lotStatusCounts[st] || 0) + 1;
+      const dates = {};
+      PROC_STAGES.forEach(s => {
+        const d = compact({ expected: lot[s.exp], actual: lot[s.act] });
+        if (Object.keys(d).length) dates[s.key === 'order' ? 'orderPlacement' : s.key] = d;
+      });
+      return compact({
+        lotNo: lot.lotNo, quantity: num(lot.quantity), supplierLocation: lot.supplierLocation, status: st, dates,
+        updates: [...(updatesByLot[lot.id] || [])].sort(byDate).map(u => compact({ date: u.date, description: u.description })),
+      });
+    }),
+  }));
 
-  // MOM
-  lines.push('', `## Meeting records: ${momRecords.length} on file`);
+  // ---- Meeting records (metadata only; the uploaded files' contents are not sent)
+  const meetingRecords = [...momRecords]
+    .sort((x, y) => (x.meetingDate < y.meetingDate ? -1 : x.meetingDate > y.meetingDate ? 1 : 0))
+    .map(m => compact({ date: m.meetingDate, description: m.description, fileName: m.fileName }));
 
-  return lines.join('\n');
+  // ---- Pre-computed summary, so the model doesn't have to count long lists itself
+  const withScope = activities.filter(a => a.totalScope && Number(a.totalScope) > 0);
+  const avgPct = withScope.length
+    ? Math.round(withScope.reduce((s, a) => s + (percentComplete(a) || 0), 0) / withScope.length) : undefined;
+  const lastDay = mpFull[mpFull.length - 1];
+  const summary = compact({
+    activities: activities.length,
+    activityStatusCounts: statusCounts,
+    overdueActivities: (statusCounts['Overdue not started'] || 0) + (statusCounts['Overdue with delay'] || 0),
+    averagePercentCompleteWhereScopeTracked: avgPct,
+    manpowerDaysLogged: mpFull.length,
+    latestManpowerDay: lastDay ? { date: lastDay.date, total: lastDay.total } : undefined,
+    dailyLogEntries: logFull.length,
+    procurementItems: procItems.length,
+    procurementLots: procLots.length,
+    procurementLotStatusCounts: lotStatusCounts,
+    meetingRecords: meetingRecords.length,
+  });
+
+  const model = {
+    project: projectName || 'Untitled', today, summary,
+    disciplines: trades, areas, subcontractors,
+    activities: actModel, procurement, meetingRecords,
+    manpowerByDay: [], dailyProgressLog: [],
+  };
+
+  // ---- Fit within the size budget by dropping the OLDEST history first
+  let keepLog = logFull.length;
+  let keepMp = mpFull.length;
+  const render = () => {
+    model.manpowerByDay = mpFull.slice(mpFull.length - keepMp);
+    model.dailyProgressLog = logFull.slice(logFull.length - keepLog);
+    let notice = '';
+    if (keepLog < logFull.length || keepMp < mpFull.length) {
+      const logFrom = model.dailyProgressLog.length ? model.dailyProgressLog[0].date : 'none';
+      const mpFrom = model.manpowerByDay.length ? model.manpowerByDay[0].date : 'none';
+      notice = 'NOTE: this project has more history than fits in one request, so older history was left out. '
+        + 'Daily-log entries included: ' + (keepLog ? 'the most recent ' + keepLog + ' of ' + logFull.length + ' (from ' + logFrom + ')' : 'none of ' + logFull.length)
+        + '. Manpower days included: ' + (keepMp ? 'the most recent ' + keepMp + ' of ' + mpFull.length + ' (from ' + mpFrom + ')' : 'none of ' + mpFull.length)
+        + '. Activities, procurement and everything else are complete. If a question needs older history, say it is not available here.';
+    }
+    return { notice, text: AI_DATA_GUIDE + (notice ? '\n\n' + notice : '') + '\n\nPROJECT DATA (JSON):\n' + JSON.stringify(model) };
+  };
+  let out = render();
+  while (out.text.length > maxChars && (keepLog > 0 || keepMp > 0)) {
+    keepLog = Math.floor(keepLog * 0.8);
+    keepMp = Math.floor(keepMp * 0.8);
+    out = render();
+  }
+
+  return {
+    text: out.text,
+    stats: {
+      activities: actModel.length,
+      manpowerDays: model.manpowerByDay.length, manpowerDaysTotal: mpFull.length,
+      dailyEntries: model.dailyProgressLog.length, dailyEntriesTotal: logFull.length,
+      subActivities: model.dailyProgressLog.reduce((n, e) => n + (e.subActivities ? e.subActivities.length : 0), 0),
+      procurementItems: procurement.length, procurementLots: procLots.length,
+      meetingRecords: meetingRecords.length,
+      chars: out.text.length, approxTokens: Math.round(out.text.length / 4), notice: out.notice,
+    },
+  };
 }
 
-function InsightsPage({ projectName, activities, manpower, dailyLog, procItems, procLots, momRecords }) {
+function InsightsPage({ projectName, activities, manpower, dailyLog, subActivities, procItems, procLots, procUpdates, momRecords, trades, areas, subcontractors }) {
   const [prompt, setPrompt] = useState('');
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [lastPrompt, setLastPrompt] = useState('');
+  const [meta, setMeta] = useState(null);
 
   const suggestions = [
     'What activities are overdue and by how much?',
     "How is today's manpower compared to the last week?",
     'What procurement lots are delayed?',
+    'Which subcontractors are on site, and in which disciplines?',
     'Summarize overall project progress.',
   ];
 
@@ -3254,14 +3409,17 @@ function InsightsPage({ projectName, activities, manpower, dailyLog, procItems, 
     setBusy(true);
     setError('');
     setAnswer('');
+    setMeta(null);
     setLastPrompt(q);
     try {
-      const context = buildProjectContext({ projectName, activities, manpower, dailyLog, procItems, procLots, momRecords });
+      const { text: context, stats } = buildProjectContext({
+        projectName, activities, manpower, dailyLog, subActivities,
+        procItems, procLots, procUpdates, momRecords, trades, areas, subcontractors,
+      });
       const { data, error: fnError } = await supabase.functions.invoke('ai-insights', { body: { prompt: q, context } });
       if (fnError) {
-        // supabase-js's own error message here is just "Edge Function returned a
-        // non-2xx status code" — the useful detail is in the response body the
-        // function actually sent, which lives on fnError.context.
+        // supabase-js's own message is just "Edge Function returned a non-2xx status
+        // code" — the useful detail is in the response body, on fnError.context.
         let detail = fnError.message || 'Edge Function request failed.';
         const ctx = fnError.context;
         if (ctx) {
@@ -3274,6 +3432,7 @@ function InsightsPage({ projectName, activities, manpower, dailyLog, procItems, 
       }
       if (data?.error) throw new Error(data.error);
       setAnswer(data?.answer || 'No answer returned.');
+      setMeta({ stats, cutOff: data?.finishReason === 'MAX_TOKENS' });
     } catch (err) {
       setError(err.message || 'Something went wrong asking for insights.');
     } finally {
@@ -3281,24 +3440,33 @@ function InsightsPage({ projectName, activities, manpower, dailyLog, procItems, 
     }
   };
 
+  const s = meta && meta.stats;
+
   return (
     <div className="space-y-4">
+      <style>{`
+        .insights-answer { scrollbar-width: thin; scrollbar-color: #B7ADA0 #F1EDE4; }
+        .insights-answer::-webkit-scrollbar { width: 10px; }
+        .insights-answer::-webkit-scrollbar-track { background: #F1EDE4; border-radius: 5px; }
+        .insights-answer::-webkit-scrollbar-thumb { background: #B7ADA0; border-radius: 5px; }
+      `}</style>
       <h2 className="text-lg font-semibold" style={{ fontFamily: "'Barlow Condensed', sans-serif" }}>Insights</h2>
       <p className="text-xs" style={{ color: '#8B8578' }}>
-        Ask a question about this project — activities, manpower, procurement, or daily progress. A summary of the
-        current data is sent along with your question; nothing is stored by the AI provider beyond that request.
+        Ask a question about this project. The complete project data — activities, manpower with subcontractor
+        breakdowns, the daily log and sub-activities, procurement lots and updates, and meeting records (details only,
+        not the files) — is sent with your question so the answer can draw on all of it.
       </p>
 
       <div className="flex flex-wrap gap-2">
-        {suggestions.map(s => (
+        {suggestions.map(sg => (
           <button
-            key={s}
-            onClick={() => { setPrompt(s); ask(s); }}
+            key={sg}
+            onClick={() => { setPrompt(sg); ask(sg); }}
             disabled={busy}
             className="text-xs border px-2.5 py-1 rounded-sm"
             style={{ color: '#3D6178', borderColor: '#3D6178' }}
           >
-            {s}
+            {sg}
           </button>
         ))}
       </div>
@@ -3337,10 +3505,436 @@ function InsightsPage({ projectName, activities, manpower, dailyLog, procItems, 
               <span className="text-xs" style={{ color: '#8B8578' }}>Thinking...</span>
             </div>
           ) : (
-            <p className="text-sm whitespace-pre-wrap" style={{ color: '#2A2620' }}>{answer}</p>
+            <div
+              className="insights-answer text-sm whitespace-pre-wrap pr-2"
+              style={{ color: '#2A2620', maxHeight: '60vh', overflowY: 'auto', overflowWrap: 'anywhere' }}
+            >
+              {answer}
+            </div>
+          )}
+          {!busy && meta && meta.cutOff && (
+            <p className="text-xs mt-3" style={{ color: '#D98E2B' }}>
+              This answer hit the model's length limit and was cut off. Ask a narrower question (one discipline, area or
+              date range) to get the rest.
+            </p>
+          )}
+          {!busy && s && (
+            <p className="text-xs mt-3" style={{ color: '#8B8578' }}>
+              Based on {s.activities} activities, {s.manpowerDays} days of manpower, {s.dailyEntries} daily-log entries
+              ({s.subActivities} sub-activities), {s.procurementItems} procurement items ({s.procurementLots} lots) and{' '}
+              {s.meetingRecords} meeting records (~{Math.round(s.approxTokens / 1000)}K tokens).
+              {s.notice ? ' ' + s.notice : ''}
+            </p>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ---------------- Reports ---------------- */
+const REPORT_DAILY_DAYS = 30;  // the daily manpower charts cover the last 30 logged days
+const REPORT_MONTHS = 12;      // the monthly manpower charts cover the last 12 months
+
+// Everything the report shows, computed from the app's current data at this moment.
+function buildReport({ activities = [], manpower = {}, procItems = [], procLots = [], procUpdates = [], trades = [] }) {
+  const generatedAt = new Date();
+  const today = todayStr();
+
+  // ---- 1. Manpower: one row per logged day, and per month (sum of the daily totals)
+  const dates = Object.keys(manpower).sort();
+  const disciplineSet = new Set(trades);
+  dates.forEach(d => Object.keys((manpower[d] || {}).trades || {}).forEach(k => disciplineSet.add(k)));
+  const disciplines = Array.from(disciplineSet);
+  const dailyBase = dates.map(date => {
+    const byDiscipline = {};
+    let total = 0;
+    Object.entries((manpower[date] || {}).trades || {}).forEach(([k, v]) => {
+      const n = Number(v || 0);
+      total += n;
+      if (n > 0) byDiscipline[k] = n;
+    });
+    return { date, label: fmtDateShort(date), total, byDiscipline };
+  });
+  const manpowerDaily = dailyBase.map((r, i) => ({ ...r, change: i > 0 ? r.total - dailyBase[i - 1].total : null }));
+  const monthTotals = {};
+  manpowerDaily.forEach(r => { const mk = r.date.slice(0, 7); monthTotals[mk] = (monthTotals[mk] || 0) + r.total; });
+  const monthKeys = Object.keys(monthTotals).sort();
+  const manpowerMonthly = monthKeys.map((month, i) => ({
+    month,
+    label: new Date(month + '-01T00:00:00').toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }),
+    total: monthTotals[month],
+    change: i > 0 ? monthTotals[month] - monthTotals[monthKeys[i - 1]] : null,
+  }));
+  const latestDay = manpowerDaily.length ? manpowerDaily[manpowerDaily.length - 1] : null;
+
+  // ---- 2. Pending activities (anything not completed), most urgent first
+  const statusOrder = {
+    'Overdue with delay': 0, 'Overdue not started': 1,
+    'Planned and progressing as per plan': 2, 'Not yet started': 3,
+  };
+  const pendingActivities = activities.filter(a => !isDone(a)).map(a => {
+    const kind = overdueKind(a);
+    const delayDays = kind === 'notStarted' ? daysBetween(a.plannedStart || a.plannedEnd, today)
+      : kind === 'delayed' ? daysBetween(a.plannedEnd, today) : 0;
+    return {
+      name: a.name, discipline: a.category || '', area: a.area || '', status: scheduleCategory(a),
+      plannedStart: a.plannedStart || '', plannedEnd: a.plannedEnd || '', actualStart: a.actualStart || '',
+      totalScope: a.totalScope ?? '', balanceScope: a.balanceScope ?? '', unit: a.unit || '',
+      pct: percentComplete(a), delayDays, assignedTo: a.assignedTo || '',
+    };
+  }).sort((x, y) => ((statusOrder[x.status] ?? 9) - (statusOrder[y.status] ?? 9))
+    || String(x.plannedEnd || '9999').localeCompare(String(y.plannedEnd || '9999'))
+    || String(x.name).localeCompare(String(y.name)));
+  const tracked = pendingActivities.filter(a => a.pct !== null);
+  const activitySummary = {
+    pending: pendingActivities.length,
+    overdue: pendingActivities.filter(a => /^Overdue/.test(a.status)).length,
+    averagePct: tracked.length ? Math.round(tracked.reduce((s, a) => s + a.pct, 0) / tracked.length) : null,
+  };
+
+  // ---- 3. Pending procurement: every lot not yet delivered, plus items with no lots yet
+  const lotsByItem = {};
+  procLots.forEach(l => { (lotsByItem[l.itemId] = lotsByItem[l.itemId] || []).push(l); });
+  const updatesByLot = {};
+  procUpdates.forEach(u => { (updatesByLot[u.lotId] = updatesByLot[u.lotId] || []).push(u); });
+  const pendingProcurement = [];
+  procItems.forEach(item => {
+    const lots = lotsByItem[item.id] || [];
+    if (lots.length === 0) {
+      pendingProcurement.push({
+        itemId: item.id, item: item.name, discipline: item.discipline || '', supplier: item.supplier || '',
+        lotNo: '', quantity: '', location: '', status: 'No lots recorded yet', statusColor: '#8B8578',
+        overdue: false, stages: [], latestUpdate: null, sortKey: '9999-12-31',
+      });
+      return;
+    }
+    lots.filter(l => !l.actDelivery).forEach(lot => {
+      const st = lotStatus(lot);
+      const next = PROC_STAGES.find(s => !lot[s.act]);
+      const ups = [...(updatesByLot[lot.id] || [])].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+      pendingProcurement.push({
+        itemId: item.id, item: item.name, discipline: item.discipline || '', supplier: item.supplier || '',
+        lotNo: lot.lotNo || '', quantity: lot.quantity ?? '', location: lot.supplierLocation || '',
+        status: st.label, statusColor: st.color, overdue: /overdue/i.test(st.label),
+        stages: PROC_STAGES.map(s => ({ key: s.key, label: s.label, expected: lot[s.exp] || '', actual: lot[s.act] || '' })),
+        latestUpdate: ups.length ? { date: ups[0].date, description: ups[0].description } : null,
+        sortKey: (next && lot[next.exp]) || '9999-12-30',
+      });
+    });
+  });
+  pendingProcurement.sort((a, b) => (Number(b.overdue) - Number(a.overdue))
+    || a.sortKey.localeCompare(b.sortKey) || String(a.item).localeCompare(String(b.item)));
+  const lotRows = pendingProcurement.filter(r => r.stages.length > 0);
+  const procurementSummary = {
+    pendingLots: lotRows.length,
+    overdueLots: lotRows.filter(r => r.overdue).length,
+    itemsWithPendingLots: new Set(lotRows.map(r => r.itemId)).size,
+    itemsWithNoLots: pendingProcurement.length - lotRows.length,
+  };
+
+  return {
+    generatedAt, disciplines, manpowerDaily, manpowerMonthly, latestDay,
+    pendingActivities, activitySummary, pendingProcurement, procurementSummary,
+  };
+}
+
+// The same report as plain sheets (rows of cells), for the Excel download.
+function reportToSheets(report) {
+  const toNum = (v) => (v === '' || v === null || v === undefined || isNaN(Number(v)) ? (v ?? '') : Number(v));
+  const stage = (r, i, field) => (r.stages[i] ? r.stages[i][field] : '');
+  return [
+    {
+      name: 'Manpower - Daily',
+      rows: [
+        ['Date', 'Total', 'Change vs previous logged day', ...report.disciplines],
+        ...report.manpowerDaily.map(r => [r.date, r.total, r.change ?? '', ...report.disciplines.map(d => r.byDiscipline[d] || 0)]),
+      ],
+    },
+    {
+      name: 'Manpower - Monthly',
+      rows: [
+        ['Month', 'Man-days (sum of daily totals)', 'Change vs previous month'],
+        ...report.manpowerMonthly.map(r => [r.month, r.total, r.change ?? '']),
+      ],
+    },
+    {
+      name: 'Pending activities',
+      rows: [
+        ['Activity', 'Discipline', 'Area', 'Status', 'Planned start', 'Planned finish', 'Actual start',
+          '% complete', 'Total scope', 'Balance scope', 'Unit', 'Days late', 'Assigned to'],
+        ...report.pendingActivities.map(a => [
+          a.name, a.discipline, a.area, a.status, a.plannedStart, a.plannedEnd, a.actualStart,
+          a.pct ?? '', toNum(a.totalScope), toNum(a.balanceScope), a.unit, a.delayDays || '', a.assignedTo,
+        ]),
+      ],
+    },
+    {
+      name: 'Pending procurement',
+      rows: [
+        ['Item', 'Discipline', 'Supplier', 'Lot', 'Quantity', 'Supplier location', 'Status',
+          ...PROC_STAGES.flatMap(s => [s.label + ' - expected', s.label + ' - actual']),
+          'Latest update date', 'Latest update'],
+        ...report.pendingProcurement.map(r => [
+          r.item, r.discipline, r.supplier, r.lotNo, toNum(r.quantity), r.location, r.status,
+          ...PROC_STAGES.flatMap((s, i) => [stage(r, i, 'expected'), stage(r, i, 'actual')]),
+          r.latestUpdate ? r.latestUpdate.date : '', r.latestUpdate ? r.latestUpdate.description : '',
+        ]),
+      ],
+    },
+  ];
+}
+
+async function downloadReportXlsx(report, projectName) {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.utils.book_new();
+  reportToSheets(report).forEach(sh => {
+    const ws = XLSX.utils.aoa_to_sheet(sh.rows);
+    ws['!cols'] = sh.rows[0].map((h, i) => ({
+      wch: Math.min(45, Math.max(String(h).length + 2, ...sh.rows.slice(1, 80).map(r => String(r[i] ?? '').length + 2))),
+    }));
+    XLSX.utils.book_append_sheet(wb, ws, sh.name);
+  });
+  const safe = String(projectName || 'project').replace(/[^\w-]+/g, '_');
+  XLSX.writeFile(wb, safe + '_report_' + todayStr() + '.xlsx');
+}
+
+function ReportBarChart({ title, data, dataKey, signed }) {
+  return (
+    <div className="report-block" style={{ border: '1px solid #D9D2C2', borderRadius: 2, padding: 8, backgroundColor: 'white', maxWidth: '100%', overflowX: 'auto' }}>
+      <p style={{ fontSize: 12, fontWeight: 600, color: '#4A453C', margin: '0 0 4px' }}>{title}</p>
+      {data.length === 0 ? (
+        <p style={{ fontSize: 11, color: '#8B8578', margin: 0 }}>Nothing logged yet.</p>
+      ) : (
+        <BarChart width={470} height={210} data={data} margin={{ top: 16, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#EEE8DA" />
+          <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#8B8578' }} interval="preserveStartEnd" />
+          <YAxis tick={{ fontSize: 9, fill: '#8B8578' }} allowDecimals={false} />
+          <Bar dataKey={dataKey} fill="#3D6178" radius={[2, 2, 0, 0]} isAnimationActive={false} label={{ position: 'top', fontSize: 8, fill: '#4A453C' }}>
+            {signed && data.map((d, i) => <Cell key={i} fill={d[dataKey] >= 0 ? '#4F7C52' : '#B5482F'} />)}
+          </Bar>
+        </BarChart>
+      )}
+    </div>
+  );
+}
+
+function ReportStage({ exp, act }) {
+  if (!exp && !act) return <span style={{ color: '#B7ADA0' }}>—</span>;
+  const late = exp && act && act > exp;
+  const overdueNow = exp && !act && exp < todayStr();
+  return (
+    <div style={{ lineHeight: 1.35 }}>
+      <div style={{ color: '#8B8578' }}>Exp {exp ? fmtDate(exp) : '—'}</div>
+      <div style={{ color: late || overdueNow ? '#B5482F' : '#2A2620', fontWeight: act ? 600 : 400 }}>
+        {act ? 'Act ' + fmtDate(act) : overdueNow ? 'Overdue' : 'Act —'}
+      </div>
+    </div>
+  );
+}
+
+function ReportsPage({ projectName, activities, manpower, trades, procItems, procLots, procUpdates }) {
+  const compute = () => buildReport({ activities, manpower, procItems, procLots, procUpdates, trades });
+  const [report, setReport] = useState(compute);
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+  const printRef = useRef(null);
+
+  const refresh = () => { setReport(compute()); setMsg(''); };
+
+  // Print (or save as PDF) just the report: copy it to the end of <body>, hide everything
+  // else while printing, then remove the copy again.
+  const handlePrint = () => {
+    const src = printRef.current;
+    if (!src) return;
+    setMsg('');
+    const holder = document.createElement('div');
+    holder.className = 'report-print-root';
+    holder.appendChild(src.cloneNode(true));
+    document.body.appendChild(holder);
+    const cleanup = () => {
+      window.removeEventListener('afterprint', cleanup);
+      if (holder.parentNode) holder.parentNode.removeChild(holder);
+    };
+    window.addEventListener('afterprint', cleanup);
+    setTimeout(cleanup, 120000);
+    try {
+      window.print();
+    } catch (e) {
+      cleanup();
+      setMsg('Printing is not available in this window. Open the app in a normal browser tab to print or save as PDF.');
+    }
+  };
+
+  const handleExcel = async () => {
+    setBusy(true);
+    setMsg('');
+    try {
+      await downloadReportXlsx(report, projectName);
+    } catch (e) {
+      setMsg('Could not create the Excel file here: ' + (e && e.message ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const { generatedAt, manpowerDaily, manpowerMonthly, latestDay, pendingActivities, activitySummary, pendingProcurement, procurementSummary } = report;
+  const dailyChart = manpowerDaily.slice(-REPORT_DAILY_DAYS);
+  const monthlyChart = manpowerMonthly.slice(-REPORT_MONTHS);
+  const stamp = generatedAt.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const h2 = { fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 600, margin: '0 0 2px', color: '#1C2733' };
+  const sub = { fontSize: 11, color: '#8B8578', margin: '0 0 10px' };
+  const th = { padding: '4px 6px', fontWeight: 400, borderBottom: '1px solid #D9D2C2' };
+  const td = { padding: '5px 6px', verticalAlign: 'top', borderBottom: '1px solid #EEE8DA' };
+
+  return (
+    <div className="space-y-4">
+      <style>{`
+        @media screen { .report-print-root { display: none; } }
+        @media print {
+          @page { size: A4 landscape; margin: 10mm; }
+          body > *:not(.report-print-root) { display: none !important; }
+          .report-print-root { display: block !important; }
+          .report-print-root, .report-print-root * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .report-block { break-inside: avoid; page-break-inside: avoid; }
+          .report-print-root tr { break-inside: avoid; page-break-inside: avoid; }
+          .report-newpage { break-before: page; page-break-before: always; }
+        }
+      `}</style>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={refresh} className="text-sm border px-3 py-1.5 rounded-sm" style={{ color: '#3D6178', borderColor: '#3D6178' }}>
+          Refresh report
+        </button>
+        <button onClick={handlePrint} className="flex items-center gap-1.5 text-white px-3 py-1.5 rounded-sm text-sm" style={{ backgroundColor: '#1C2733' }}>
+          <Printer size={14} /> Print / Save as PDF
+        </button>
+        <button
+          onClick={handleExcel} disabled={busy}
+          className="flex items-center gap-1.5 text-white px-3 py-1.5 rounded-sm text-sm"
+          style={{ backgroundColor: busy ? '#B7ADA0' : '#D98E2B' }}
+        >
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Download Excel
+        </button>
+      </div>
+      <p className="text-xs" style={{ color: '#8B8578' }}>
+        This is a snapshot of the data as of {stamp}; use Refresh to take a new one. For a PDF, choose "Save as PDF" as the
+        printer. The Excel file holds the data behind each section (charts can't be placed inside it).
+      </p>
+      {msg && <p className="text-xs" style={{ color: '#B5482F' }}>{msg}</p>}
+
+      <div className="tracker-card bg-white border rounded-sm p-4" style={{ borderColor: '#D9D2C2' }}>
+        <div ref={printRef} style={{ fontFamily: "'Inter', sans-serif", color: '#2A2620', backgroundColor: 'white', width: '100%' }}>
+          <div style={{ borderBottom: '3px solid #D98E2B', paddingBottom: 6, marginBottom: 14 }}>
+            <p style={{ ...h2, fontSize: 26 }}>{projectName || 'Project'} — status report</p>
+            <p style={{ fontSize: 11, color: '#8B8578', margin: 0 }}>Generated {stamp}</p>
+          </div>
+
+          <p style={h2}>1. Manpower</p>
+          <p style={sub}>
+            {latestDay
+              ? 'Latest logged day ' + fmtDate(latestDay.date) + ': ' + latestDay.total + ' on site'
+                + (Object.keys(latestDay.byDiscipline).length
+                  ? ' (' + Object.entries(latestDay.byDiscipline).map(([d, n]) => d + ' ' + n).join(', ') + ')' : '') + '.'
+              : 'No manpower has been logged yet.'}
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+            <ReportBarChart title={'Daily manpower (last ' + dailyChart.length + ' logged days)'} data={dailyChart} dataKey="total" />
+            <ReportBarChart title="Day-over-day change" data={dailyChart.filter(d => d.change !== null)} dataKey="change" signed />
+            <ReportBarChart title={'Monthly manpower, man-days (last ' + monthlyChart.length + ' months)'} data={monthlyChart} dataKey="total" />
+            <ReportBarChart title="Month-over-month change" data={monthlyChart.filter(d => d.change !== null)} dataKey="change" signed />
+          </div>
+
+          <div className="report-newpage" style={{ marginTop: 22 }}>
+            <p style={h2}>2. Pending activities — completion</p>
+            <p style={sub}>
+              {activitySummary.pending} pending, {activitySummary.overdue} overdue
+              {activitySummary.averagePct !== null ? '; average completion ' + activitySummary.averagePct + '% (where scope is tracked)' : ''}.
+              Each bar is the share of the activity's total scope completed; "n/a" means no total scope was entered.
+            </p>
+            {pendingActivities.length === 0 && <p style={{ fontSize: 12, color: '#8B8578' }}>No pending activities.</p>}
+            {pendingActivities.map((a, i) => (
+              <div
+                key={i} className="report-block"
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2.3fr) minmax(0,2fr) 44px', gap: 10, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #EEE8DA' }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <p style={{ fontSize: 12, margin: 0, fontWeight: 500 }}>{a.name}</p>
+                  <p style={{ fontSize: 10, margin: 0, color: '#8B8578' }}>
+                    {[a.discipline, a.area].filter(Boolean).join(' · ')}{(a.discipline || a.area) ? ' · ' : ''}
+                    <span style={{ color: CATEGORY_COLORS[a.status] || '#8B8578', fontWeight: 600 }}>{a.status}</span>
+                    {a.delayDays > 0 ? ' · ' + a.delayDays + 'd late' : ''}
+                    {a.plannedEnd ? ' · due ' + fmtDate(a.plannedEnd) : ''}
+                  </p>
+                </div>
+                <div style={{ height: 14, backgroundColor: '#EEE8DA', borderRadius: 2 }}>
+                  <div style={{ width: (a.pct === null ? 0 : a.pct) + '%', height: '100%', backgroundColor: CATEGORY_COLORS[a.status] || '#3D6178', borderRadius: 2 }} />
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 600, textAlign: 'right' }}>{a.pct === null ? 'n/a' : a.pct + '%'}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="report-newpage" style={{ marginTop: 22 }}>
+            <p style={h2}>3. Pending procurement</p>
+            <p style={sub}>
+              {procurementSummary.pendingLots} lot{procurementSummary.pendingLots === 1 ? '' : 's'} not yet delivered across{' '}
+              {procurementSummary.itemsWithPendingLots} item{procurementSummary.itemsWithPendingLots === 1 ? '' : 's'}
+              {procurementSummary.overdueLots ? ', ' + procurementSummary.overdueLots + ' overdue' : ''}
+              {procurementSummary.itemsWithNoLots ? '; ' + procurementSummary.itemsWithNoLots + ' item' + (procurementSummary.itemsWithNoLots === 1 ? '' : 's') + ' with no lots recorded yet' : ''}.
+              Dates show expected (Exp) against actual (Act).
+            </p>
+            {pendingProcurement.length === 0 ? (
+              <p style={{ fontSize: 12, color: '#8B8578' }}>Nothing pending — every lot has been delivered.</p>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: '#8B8578' }}>
+                    <th style={th}>Item</th>
+                    <th style={th}>Lot</th>
+                    <th style={th}>Status</th>
+                    {PROC_STAGES.map(s => <th key={s.key} style={th}>{s.label}</th>)}
+                    <th style={th}>Latest update</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingProcurement.map((r, i) => (
+                    <tr key={i}>
+                      <td style={td}>
+                        <div style={{ fontWeight: 600, fontSize: 11 }}>{r.item}</div>
+                        <div style={{ color: '#8B8578' }}>{[r.discipline, r.supplier].filter(Boolean).join(' · ') || '—'}</div>
+                      </td>
+                      <td style={td}>
+                        {r.lotNo ? (
+                          <div>
+                            <div style={{ fontWeight: 600 }}>Lot {r.lotNo}</div>
+                            <div style={{ color: '#8B8578' }}>{r.quantity !== '' ? 'Qty ' + r.quantity : ''}</div>
+                            <div style={{ color: '#8B8578' }}>{r.location}</div>
+                          </div>
+                        ) : <span style={{ color: '#B7ADA0' }}>—</span>}
+                      </td>
+                      <td style={{ ...td, color: r.statusColor, fontWeight: 600 }}>{r.status}</td>
+                      {PROC_STAGES.map((s, si) => (
+                        <td key={s.key} style={td}>
+                          {r.stages[si] ? <ReportStage exp={r.stages[si].expected} act={r.stages[si].actual} /> : <span style={{ color: '#B7ADA0' }}>—</span>}
+                        </td>
+                      ))}
+                      <td style={td}>
+                        {r.latestUpdate ? (
+                          <div>
+                            <div style={{ color: '#8B8578' }}>{fmtDate(r.latestUpdate.date)}</div>
+                            <div>{r.latestUpdate.description}</div>
+                          </div>
+                        ) : <span style={{ color: '#B7ADA0' }}>—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3420,10 +4014,13 @@ function TimelinePage({ activities, procItems, procLots, areas, trades }) {
       const onTimeBar = a.actualStart ? monthOverlap(a.actualStart, onTimeEnd) : null;
       const hasDateDelay = a.plannedEnd && actualEndForBar && actualEndForBar > a.plannedEnd;
       const delayBar = hasDateDelay ? monthOverlap(laterOf(a.plannedEnd, a.actualStart), actualEndForBar) : null;
-      const notStartedDelayBar = (!a.actualStart && isOverdue(a)) ? monthOverlap(a.plannedEnd, today) : null;
+      const kind = overdueKind(a);
+      // Not started and past its planned start: hatch from the planned start to today.
+      const notStartedDelayBar = kind === 'notStarted' ? monthOverlap(a.plannedStart || a.plannedEnd, today) : null;
       const delayDays = a.actualEnd && a.plannedEnd && a.actualEnd > a.plannedEnd
         ? daysBetween(a.plannedEnd, a.actualEnd)
-        : (!a.actualEnd && a.plannedEnd && isOverdue(a) ? daysBetween(a.plannedEnd, today) : 0);
+        : (kind === 'notStarted' ? daysBetween(a.plannedStart || a.plannedEnd, today)
+          : (kind === 'delayed' ? daysBetween(a.plannedEnd, today) : 0));
       const pct = percentComplete(a);
       const visible = plannedBar || onTimeBar || delayBar || notStartedDelayBar;
       return { a, plannedBar, onTimeBar, delayBar, notStartedDelayBar, delayDays, pct, visible };

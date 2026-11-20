@@ -124,40 +124,37 @@ Admin tab directly. It's not a silent data loss, just a missed nudge.
 
 ## AI Insights (optional)
 
-The **Insights** tab lets you ask questions about the current project
-("what's overdue?", "how's manpower trending?") and get a quick answer from
-Google's Gemini API (free tier — no billing needed). A compact text summary
-of the project (activity status breakdown, overdue items, manpower trend,
-procurement delays — not raw file uploads or full record dumps) is built
-client-side and sent along with your question.
+The **Insights** tab lets you ask questions about the current project ("what's overdue?", "how's manpower trending?", "which lots are delayed?") and get an answer from Google's Gemini API (free tier, no billing needed).
+
+**What the AI sees.** Every question is sent together with the project's *complete* data model, built in the browser from what is already loaded:
+
+- all activities (dates, scope, computed status, delay days, discipline, area, notes)
+- manpower for every logged day, by discipline and by subcontractor
+- every daily-log entry, with its sub-activities nested underneath
+- procurement items with their lots, dates, statuses and dated updates
+- the project's disciplines, areas and subcontractors
+- meeting records (date, description, file name only; **the contents of the uploaded files are not sent**)
+
+Other projects' data is never included.
+
+**Size limit.** The data is capped at about 600,000 characters (roughly 150K tokens, enough for around 2,000 daily-log entries alongside everything else) per question (`MAX_CONTEXT_CHARS` in `src/App.jsx`). If a project outgrows that, the *oldest* daily-log and manpower history is dropped first. Activities, procurement and everything else are always sent in full, and the Insights tab says so under the answer.
+
+**Long answers.** The Edge Function allows up to 8,192 output tokens (it was 500, which cut longer answers off). The answer box scrolls for long answers and shows a notice if the model still reaches the limit. A request is also given up after 120 seconds with a clear message, instead of a generic gateway error.
 
 **One-time setup:**
 
-1. Create a free API key at
-   [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — no
-   credit card required.
-2. Deploy the Edge Function and set the secret (same pattern as
-   `notify-signup` — via the Supabase dashboard's function editor, or CLI):
+1. Create a free API key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), no credit card required.
+2. Deploy the Edge Function and set the secret (same pattern as `notify-signup`, via the Supabase dashboard's function editor or the CLI):
    ```bash
    supabase functions deploy ai-insights
    supabase secrets set GEMINI_API_KEY=your-gemini-api-key
    ```
+   After changing `supabase/functions/ai-insights/index.ts`, redeploy it; the app code and the function are deployed separately.
 
 **Worth knowing about the free tier, stated plainly:**
-- **Rate limits, not dollar limits.** The free tier caps requests per day
-  (roughly a few hundred to low thousands depending on Google's current
-  limits for `gemini-2.5-flash` — check your actual quota in AI Studio) —
-  it doesn't bill you if you go over, it just stops answering until the
-  limit resets.
-- **Google may use free-tier prompts to improve their models.** This is
-  documented Google policy, not a guess. The data sent is a summary (status
-  counts, overdue items, trends) rather than raw uploaded files, but it's
-  still your project's data — decide if that's an acceptable tradeoff for
-  $0 cost. Attaching a billing account removes this and switches to paid,
-  metered pricing instead.
-- If usage ever needs to scale beyond casual use, that's the point to
-  revisit — either accept paid Gemini pricing or swap back to another
-  provider (the Edge Function is a thin, swappable wrapper either way).
 
-**If the key is missing or invalid**, the Insights tab shows the actual
-error message returned by the function rather than failing silently.
+- **Rate limits, not dollar limits.** The free tier caps requests and tokens per minute and per day (check your actual quota in AI Studio). Going over doesn't bill you; the AI simply stops answering until the limit resets. Because each question now carries the whole project, a few questions in quick succession can reach the per-minute token limit on a large project.
+- **Google may use free-tier prompts to improve their models.** This is documented Google policy, not a guess. Because the *full* project data is sent (activity names and notes, subcontractor and supplier names, meeting descriptions), not just a summary, decide whether that is acceptable for this project. Attaching a billing account to the key turns that off and switches to metered pricing.
+- If usage grows beyond casual use, revisit the provider choice; the Edge Function is a thin, swappable wrapper.
+
+**If the key is missing or invalid**, the Insights tab shows the actual error returned by the function instead of failing silently.
