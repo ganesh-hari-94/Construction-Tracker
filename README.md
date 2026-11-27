@@ -122,6 +122,22 @@ not configured yet, secret missing, etc.), signup itself still succeeds —
 the new account just won't be visible to the admin except by checking the
 Admin tab directly. It's not a silent data loss, just a missed nudge.
 
+## Reports
+
+The **Reports** tab takes a snapshot of the current project, stamped with the time it was taken (use *Refresh report* for a new one). It has three sections:
+
+1. **Manpower:** daily and monthly manpower charts, each with its day-over-day / month-over-month change.
+2. **Pending activities:** every activity not yet completed, most urgent first, as a progress bar showing the percentage of its total scope completed ("n/a" where no total scope was entered).
+3. **Pending procurement:** every lot not yet delivered (plus items with no lots yet), with quantity, location, status, expected vs actual dates for each stage, and the latest update.
+
+Three ways to take it away:
+
+- **Print / Save as PDF:** prints just the report (landscape A4). Choose "Save as PDF" as the printer.
+- **Download Excel:** the data behind each section on four sheets (daily manpower, monthly manpower, pending activities, pending procurement). Charts can't be placed inside the file.
+- **Download PowerPoint:** a 16:9 deck with a cover, manpower charts, the activity progress bars and the procurement table (long lists continue over several slides).
+
+The PowerPoint is built in the browser with [PptxGenJS](https://github.com/gitbrent/PptxGenJS), which is listed in `package.json` and only downloaded when the button is clicked. After pulling this change, run `npm install` (and commit the updated `package-lock.json` if your repo has one).
+
 ## AI Insights (optional)
 
 The **Insights** tab lets you ask questions about the current project ("what's overdue?", "how's manpower trending?", "which lots are delayed?") and get an answer from Google's Gemini API (free tier, no billing needed).

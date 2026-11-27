@@ -3699,6 +3699,259 @@ async function downloadReportXlsx(report, projectName) {
   XLSX.writeFile(wb, safe + '_report_' + todayStr() + '.xlsx');
 }
 
+// ---- PowerPoint export (built with pptxgenjs; the library is only loaded when the button is clicked)
+const PPT = {
+  font: 'Calibri', navy: '1C2733', navy2: '28394A', steel: '3D6178', amber: 'D98E2B',
+  ink: '2A2620', ink2: '4A453C', mute: '8B8578', line: 'EEE8DA', paper: 'F1EDE4', green: '4F7C52', red: 'B5482F',
+};
+const pptHex = (c) => (String(c || '').replace('#', '') || PPT.mute);
+const pptTrim = (s, n) => { const t = String(s ?? ''); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+const pptDate = (s) => (s ? new Date(s + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }) : '—');
+const PPT_ACTIVITY_ROWS = 9;   // pending activities per slide
+const PPT_PROCUREMENT_ROWS = 7; // pending procurement lots per slide
+
+// Turns a report (from buildReport) into a PowerPoint deck. `PptxGenJS` is the library's
+// constructor, passed in so this stays testable.
+function buildReportPptx(PptxGenJS, report, projectName) {
+  const pres = new PptxGenJS();
+  const name = projectName || 'Project';
+  const stamp = report.generatedAt.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  pres.layout = 'LAYOUT_WIDE'; // 13.33 x 7.5 in
+  pres.title = name + ' - status report';
+  pres.theme = { headFontFace: PPT.font, bodyFontFace: PPT.font };
+
+  pres.defineSlideMaster({
+    title: 'REPORT',
+    background: { color: 'FFFFFF' },
+    objects: [{ text: { text: pptTrim(name, 60) + ' - status report  |  ' + stamp, options: { x: 0.5, y: 7.02, w: 10, h: 0.3, fontFace: PPT.font, fontSize: 10, color: PPT.mute, valign: 'middle', margin: 0 } } }],
+    slideNumber: { x: 12.2, y: 7.02, w: 0.63, h: 0.3, fontFace: PPT.font, fontSize: 10, color: PPT.mute, align: 'right' },
+  });
+  pres.defineSlideMaster({ title: 'COVER', background: { color: PPT.navy } });
+
+  const addTitle = (slide, text, subtitle) => {
+    slide.addText(text, { x: 0.5, y: 0.35, w: 12.3, h: 0.7, fontFace: PPT.font, fontSize: 30, bold: true, color: PPT.navy, align: 'left', valign: 'middle', margin: 0, isTextBox: true });
+    if (subtitle) {
+      slide.addText(subtitle, { x: 0.5, y: 1.05, w: 12.3, h: 0.4, fontFace: PPT.font, fontSize: 14, color: PPT.mute, align: 'left', valign: 'top', margin: 0, isTextBox: true });
+    }
+  };
+  const addEmpty = (slide, text) => {
+    slide.addText(text, { x: 0.5, y: 2.6, w: 12.3, h: 1.0, fontFace: PPT.font, fontSize: 20, color: PPT.mute, align: 'left', valign: 'middle', margin: 0, isTextBox: true });
+  };
+
+  const { activitySummary, procurementSummary, latestDay } = report;
+
+  // ---- Cover
+  const cover = pres.addSlide({ masterName: 'COVER' });
+  cover.addText(name, { x: 0.7, y: 1.0, w: 11.9, h: 1.1, fontFace: PPT.font, fontSize: name.length > 34 ? 32 : 44, bold: true, color: 'FFFFFF', align: 'left', valign: 'middle', margin: 0, isTextBox: true });
+  cover.addText('Status report', { x: 0.7, y: 2.15, w: 11.9, h: 0.55, fontFace: PPT.font, fontSize: 24, color: PPT.amber, align: 'left', valign: 'middle', margin: 0, isTextBox: true });
+  cover.addText('Generated ' + stamp, { x: 0.7, y: 2.75, w: 11.9, h: 0.4, fontFace: PPT.font, fontSize: 14, color: '8FA3B3', align: 'left', valign: 'middle', margin: 0, isTextBox: true });
+  const cards = [
+    [latestDay ? String(latestDay.total) : '—', latestDay ? 'on site on the latest logged day (' + fmtDate(latestDay.date) + ')' : 'No manpower logged yet'],
+    [String(activitySummary.pending), 'pending activities' + (activitySummary.overdue ? ' · ' + activitySummary.overdue + ' overdue' : '')],
+    [String(procurementSummary.pendingLots), 'procurement lots not yet delivered' + (procurementSummary.overdueLots ? ' · ' + procurementSummary.overdueLots + ' overdue' : '')],
+  ];
+  cards.forEach(([big, label], i) => {
+    const x = 0.7 + i * 4.07;
+    cover.addShape(pres.shapes.RECTANGLE, { x, y: 4.0, w: 3.85, h: 2.1, fill: { color: PPT.navy2 }, line: { color: PPT.steel, width: 1 } });
+    cover.addText(big, { x: x + 0.25, y: 4.2, w: 3.35, h: 1.0, fontFace: PPT.font, fontSize: 48, bold: true, color: 'FFFFFF', align: 'left', valign: 'middle', margin: 0, isTextBox: true });
+    cover.addText(label, { x: x + 0.25, y: 5.2, w: 3.35, h: 0.75, fontFace: PPT.font, fontSize: 14, color: '8FA3B3', align: 'left', valign: 'top', margin: 0, isTextBox: true });
+  });
+
+  // ---- Manpower: two slides (daily, monthly), each with a level chart and a change chart
+  const chartOpts = (title, extra) => ({
+    barDir: 'col', chartColors: [PPT.steel], showLegend: false,
+    showTitle: true, title, titleFontSize: 14, titleColor: PPT.ink2, titleFontFace: '+mn-lt',
+    showValue: true, dataLabelPosition: 'outEnd', dataLabelFontSize: 9, dataLabelColor: PPT.ink2, dataLabelFontFace: '+mn-lt', dataLabelFormatCode: '#,##0',
+    catAxisLabelFontSize: 9, catAxisLabelColor: PPT.mute, catAxisLabelFontFace: '+mn-lt', catAxisLabelRotate: 270,
+    valAxisLabelFontSize: 9, valAxisLabelColor: PPT.mute, valAxisLabelFontFace: '+mn-lt', valAxisLabelFormatCode: '#,##0',
+    valGridLine: { color: PPT.line, size: 0.5 }, catGridLine: { style: 'none' }, barGapWidthPct: 40,
+    ...extra,
+  });
+  const addManpowerSlide = (title, subtitle, left, right) => {
+    const slide = pres.addSlide({ masterName: 'REPORT' });
+    addTitle(slide, title, subtitle);
+    [[left, 0.5, false], [right, 6.75, true]].forEach(([c, x, signed]) => {
+      if (c.labels.length === 0) {
+        slide.addText(c.title + ': nothing logged yet.', { x, y: 2.6, w: 6.05, h: 1.0, fontFace: PPT.font, fontSize: 16, color: PPT.mute, align: 'left', valign: 'middle', margin: 0, isTextBox: true });
+        return;
+      }
+      const extra = { x, y: 1.6, w: 6.05, h: 5.2 };
+      if (signed) Object.assign(extra, { chartColors: [PPT.green], invertedColors: [PPT.red], dataLabelFormatCode: '+#,##0;-#,##0;0' });
+      slide.addChart(pres.charts.BAR, [{ name: c.title, labels: c.labels, values: c.values }], chartOpts(c.title, extra));
+    });
+  };
+  const daily = report.manpowerDaily.slice(-REPORT_DAILY_DAYS);
+  const dailyChange = daily.filter(d => d.change !== null);
+  const monthly = report.manpowerMonthly.slice(-REPORT_MONTHS);
+  const monthlyChange = monthly.filter(d => d.change !== null);
+  addManpowerSlide(
+    'Manpower - daily',
+    latestDay
+      ? 'Latest logged day ' + fmtDate(latestDay.date) + ': ' + latestDay.total + ' on site'
+        + (Object.keys(latestDay.byDiscipline).length ? ' (' + Object.entries(latestDay.byDiscipline).map(([d, n]) => d + ' ' + n).join(', ') + ')' : '') + '.'
+      : 'No manpower has been logged yet.',
+    { title: 'Daily manpower (last ' + daily.length + ' logged days)', labels: daily.map(d => d.label), values: daily.map(d => d.total) },
+    { title: 'Day-over-day change', labels: dailyChange.map(d => d.label), values: dailyChange.map(d => d.change) },
+  );
+  addManpowerSlide(
+    'Manpower - monthly',
+    'Man-days per month: the sum of each month\'s daily totals.',
+    { title: 'Monthly manpower, man-days (last ' + monthly.length + ' months)', labels: monthly.map(d => d.label), values: monthly.map(d => d.total) },
+    { title: 'Month-over-month change', labels: monthlyChange.map(d => d.label), values: monthlyChange.map(d => d.change) },
+  );
+
+  // ---- Pending activities: one row per activity, a progress bar showing % of scope completed
+  const acts = report.pendingActivities;
+  const actPages = Math.max(1, Math.ceil(acts.length / PPT_ACTIVITY_ROWS));
+  const actSub = activitySummary.pending + ' pending · ' + activitySummary.overdue + ' overdue'
+    + (activitySummary.averagePct !== null ? ' · average completion ' + activitySummary.averagePct + '% (where scope is tracked)' : '');
+  for (let p = 0; p < actPages; p++) {
+    const slide = pres.addSlide({ masterName: 'REPORT' });
+    addTitle(slide, 'Pending activities - completion' + (actPages > 1 ? ' (' + (p + 1) + ' of ' + actPages + ')' : ''), actSub);
+    if (acts.length === 0) { addEmpty(slide, 'No pending activities.'); continue; }
+    acts.slice(p * PPT_ACTIVITY_ROWS, (p + 1) * PPT_ACTIVITY_ROWS).forEach((a, i) => {
+      const y = 1.65 + i * 0.58;
+      const color = pptHex(CATEGORY_COLORS[a.status]);
+      const base = [a.discipline, a.area].filter(Boolean).join(' · ');
+      const runs = [];
+      if (base) runs.push({ text: pptTrim(base, 26) + ' · ', options: { color: PPT.mute } });
+      runs.push({ text: a.status, options: { color, bold: true } });
+      const extra = (a.delayDays > 0 ? ' · ' + a.delayDays + 'd late' : '') + (a.plannedEnd ? ' · due ' + pptDate(a.plannedEnd) : '');
+      if (extra) runs.push({ text: extra, options: { color: PPT.mute } });
+      slide.addText(pptTrim(a.name, 56), { x: 0.5, y, w: 6.7, h: 0.3, fontFace: PPT.font, fontSize: 14, color: PPT.ink, align: 'left', valign: 'middle', margin: 0, isTextBox: true });
+      slide.addText(runs, { x: 0.5, y: y + 0.28, w: 6.7, h: 0.24, fontFace: PPT.font, fontSize: 11, align: 'left', valign: 'middle', margin: 0, isTextBox: true });
+      slide.addShape(pres.shapes.RECTANGLE, { x: 7.35, y: y + 0.12, w: 4.5, h: 0.26, fill: { color: PPT.line }, line: { type: 'none' } });
+      if (a.pct !== null && a.pct > 0) {
+        slide.addShape(pres.shapes.RECTANGLE, { x: 7.35, y: y + 0.12, w: Math.max(0.05, 4.5 * a.pct / 100), h: 0.26, fill: { color }, line: { type: 'none' } });
+      }
+      slide.addText(a.pct === null ? 'n/a' : a.pct + '%', { x: 11.95, y, w: 0.88, h: 0.5, fontFace: PPT.font, fontSize: 16, bold: true, color: a.pct === null ? PPT.mute : PPT.ink, align: 'right', valign: 'middle', margin: 0, isTextBox: true });
+      slide.addShape(pres.shapes.LINE, { x: 0.5, y: y + 0.55, w: 12.33, h: 0, line: { color: PPT.line, width: 0.75 } });
+    });
+  }
+
+  // ---- Pending procurement: a table, a lot per row
+  const lots = report.pendingProcurement;
+  const procPages = Math.max(1, Math.ceil(lots.length / PPT_PROCUREMENT_ROWS));
+  const procSub = procurementSummary.pendingLots + ' lot' + (procurementSummary.pendingLots === 1 ? '' : 's') + ' not yet delivered across '
+    + procurementSummary.itemsWithPendingLots + ' item' + (procurementSummary.itemsWithPendingLots === 1 ? '' : 's')
+    + (procurementSummary.overdueLots ? ' · ' + procurementSummary.overdueLots + ' overdue' : '')
+    + (procurementSummary.itemsWithNoLots ? ' · ' + procurementSummary.itemsWithNoLots + ' item' + (procurementSummary.itemsWithNoLots === 1 ? '' : 's') + ' with no lots yet' : '');
+  const noBorder = { type: 'none' };
+  const rowBorder = [noBorder, noBorder, { type: 'solid', pt: 0.5, color: PPT.line }, noBorder];
+  for (let p = 0; p < procPages; p++) {
+    const slide = pres.addSlide({ masterName: 'REPORT' });
+    addTitle(slide, 'Pending procurement' + (procPages > 1 ? ' (' + (p + 1) + ' of ' + procPages + ')' : ''), procSub);
+    if (lots.length === 0) { addEmpty(slide, 'Nothing pending - every lot has been delivered.'); continue; }
+    const head = ['Item', 'Lot', 'Status', ...PROC_STAGES.map(s => s.label), 'Latest update'].map(h => ({
+      text: h, options: { bold: true, color: PPT.ink2, fill: { color: PPT.paper }, fontSize: 10, fontFace: PPT.font, valign: 'middle', border: rowBorder },
+    }));
+    const body = lots.slice(p * PPT_PROCUREMENT_ROWS, (p + 1) * PPT_PROCUREMENT_ROWS).map(r => {
+      const cell = (text, extra) => ({ text, options: { fontSize: 10, fontFace: PPT.font, color: PPT.ink, valign: 'top', border: rowBorder, ...extra } });
+      const itemRuns = [
+        { text: pptTrim(r.item, 40), options: { bold: true, fontSize: 11, color: PPT.ink, breakLine: true } },
+        { text: pptTrim([r.discipline, r.supplier].filter(Boolean).join(' · ') || '—', 40), options: { color: PPT.mute, fontSize: 10 } },
+      ];
+      const lotRuns = r.lotNo ? [{ text: 'Lot ' + r.lotNo, options: { bold: true, color: PPT.ink, breakLine: !!(r.quantity !== '' || r.location) } }] : [{ text: '—', options: { color: PPT.mute } }];
+      if (r.lotNo && r.quantity !== '') lotRuns.push({ text: 'Qty ' + r.quantity, options: { color: PPT.mute, breakLine: !!r.location } });
+      if (r.lotNo && r.location) lotRuns.push({ text: pptTrim(r.location, 16), options: { color: PPT.mute } });
+      const stageCells = PROC_STAGES.map((s, si) => {
+        const st = r.stages[si];
+        if (!st || (!st.expected && !st.actual)) return cell('—', { color: PPT.mute });
+        const late = st.expected && st.actual && st.actual > st.expected;
+        const overdueNow = st.expected && !st.actual && st.expected < todayStr();
+        return cell([
+          { text: 'Exp ' + pptDate(st.expected), options: { color: PPT.mute, breakLine: true } },
+          { text: st.actual ? 'Act ' + pptDate(st.actual) : (overdueNow ? 'Overdue' : 'Act —'), options: { color: late || overdueNow ? PPT.red : PPT.ink, bold: !!st.actual || overdueNow } },
+        ]);
+      });
+      const upd = r.latestUpdate
+        ? cell([{ text: pptDate(r.latestUpdate.date), options: { color: PPT.mute, breakLine: true } }, { text: pptTrim(r.latestUpdate.description, 70), options: { color: PPT.ink } }])
+        : cell('—', { color: PPT.mute });
+      return [cell(itemRuns), cell(lotRuns), cell(r.status, { color: pptHex(r.statusColor), bold: true }), ...stageCells, upd];
+    });
+    const rows = [head, ...body];
+    slide.addTable(rows, {
+      x: 0.5, y: 1.6, w: 12.3, colW: [2.3, 1.3, 1.4, 1.25, 1.25, 1.25, 1.25, 2.3],
+      rowH: rows.map((_, i) => (i === 0 ? 0.35 : 0.7)), fontFace: PPT.font, fontSize: 10, margin: [0.04, 0.06, 0.04, 0.06],
+    });
+  }
+
+  return pres;
+}
+
+// pptxgenjs leaves empty "folder" entries inside the .pptx (which is a ZIP). Some cloud viewers
+// (PowerPoint for the web, OneDrive) have refused such files, so they are removed here by
+// copying every real entry untouched and rewriting the ZIP's directory. If the file doesn't
+// look exactly as expected, it is returned unchanged rather than risk damaging it.
+function stripZipFolderEntries(input) {
+  const data = input instanceof Uint8Array ? input : new Uint8Array(input);
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let eocd = -1;
+  for (let i = data.length - 22; i >= Math.max(0, data.length - 22 - 65535); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) return data;
+  const total = dv.getUint16(eocd + 10, true);
+  const cdOffset = dv.getUint32(eocd + 16, true);
+  if (total === 0xffff || cdOffset === 0xffffffff) return data; // ZIP64: leave alone
+  const entries = [];
+  let p = cdOffset;
+  for (let n = 0; n < total; n++) {
+    if (p + 46 > data.length || dv.getUint32(p, true) !== 0x02014b50) return data;
+    const flags = dv.getUint16(p + 8, true);
+    const compSize = dv.getUint32(p + 20, true);
+    const nameLen = dv.getUint16(p + 28, true);
+    const extraLen = dv.getUint16(p + 30, true);
+    const commentLen = dv.getUint16(p + 32, true);
+    const localOffset = dv.getUint32(p + 42, true);
+    const recLen = 46 + nameLen + extraLen + commentLen;
+    if (flags & 0x08) return data; // sizes stored after the data: don't risk it
+    if (localOffset + 30 > data.length || dv.getUint32(localOffset, true) !== 0x04034b50) return data;
+    const localLen = 30 + dv.getUint16(localOffset + 26, true) + dv.getUint16(localOffset + 28, true) + compSize;
+    if (localOffset + localLen > data.length) return data;
+    entries.push({ p, recLen, localOffset, localLen, isDir: data[p + 46 + nameLen - 1] === 0x2f });
+    p += recLen;
+  }
+  if (!entries.some(e => e.isDir)) return data;
+  const kept = entries.filter(e => !e.isDir);
+  const eocdLen = 22 + dv.getUint16(eocd + 20, true);
+  const out = new Uint8Array(kept.reduce((s, e) => s + e.localLen + e.recLen, 0) + eocdLen);
+  const odv = new DataView(out.buffer);
+  let pos = 0;
+  const newOffsets = kept.map(e => { const at = pos; out.set(data.subarray(e.localOffset, e.localOffset + e.localLen), pos); pos += e.localLen; return at; });
+  const cdStart = pos;
+  kept.forEach((e, i) => { out.set(data.subarray(e.p, e.p + e.recLen), pos); odv.setUint32(pos + 42, newOffsets[i], true); pos += e.recLen; });
+  const cdLen = pos - cdStart;
+  out.set(data.subarray(eocd, eocd + eocdLen), pos);
+  odv.setUint16(pos + 8, kept.length, true);
+  odv.setUint16(pos + 10, kept.length, true);
+  odv.setUint32(pos + 12, cdLen, true);
+  odv.setUint32(pos + 16, cdStart, true);
+  return out;
+}
+
+async function downloadReportPptx(report, projectName) {
+  const PptxGenJS = await loadPptxGen();
+  const pres = buildReportPptx(PptxGenJS, report, projectName);
+  const safe = String(projectName || 'project').replace(/[^\w-]+/g, '_');
+  const bytes = stripZipFolderEntries(await pres.write({ outputType: 'arraybuffer' }));
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = safe + '_report_' + todayStr() + '.pptx';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// Loaded on demand so the (large) library is only downloaded when someone asks for a deck.
+async function loadPptxGen() {
+  const mod = await import('pptxgenjs');
+  return mod.default || mod;
+}
+
 function ReportBarChart({ title, data, dataKey, signed }) {
   return (
     <div className="report-block" style={{ border: '1px solid #D9D2C2', borderRadius: 2, padding: 8, backgroundColor: 'white', maxWidth: '100%', overflowX: 'auto' }}>
@@ -3778,6 +4031,19 @@ function ReportsPage({ projectName, activities, manpower, trades, procItems, pro
     }
   };
 
+  const [pptBusy, setPptBusy] = useState(false);
+  const handlePpt = async () => {
+    setPptBusy(true);
+    setMsg('');
+    try {
+      await downloadReportPptx(report, projectName);
+    } catch (e) {
+      setMsg('Could not create the PowerPoint file: ' + (e && e.message ? e.message : e));
+    } finally {
+      setPptBusy(false);
+    }
+  };
+
   const { generatedAt, manpowerDaily, manpowerMonthly, latestDay, pendingActivities, activitySummary, pendingProcurement, procurementSummary } = report;
   const dailyChart = manpowerDaily.slice(-REPORT_DAILY_DAYS);
   const monthlyChart = manpowerMonthly.slice(-REPORT_MONTHS);
@@ -3816,10 +4082,17 @@ function ReportsPage({ projectName, activities, manpower, trades, procItems, pro
         >
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Download Excel
         </button>
+        <button
+          onClick={handlePpt} disabled={pptBusy}
+          className="flex items-center gap-1.5 text-white px-3 py-1.5 rounded-sm text-sm"
+          style={{ backgroundColor: pptBusy ? '#B7ADA0' : '#3D6178' }}
+        >
+          {pptBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Download PowerPoint
+        </button>
       </div>
       <p className="text-xs" style={{ color: '#8B8578' }}>
         This is a snapshot of the data as of {stamp}; use Refresh to take a new one. For a PDF, choose "Save as PDF" as the
-        printer. The Excel file holds the data behind each section (charts can't be placed inside it).
+        printer. The Excel file holds the data behind each section (charts can't be placed inside it); the PowerPoint has the charts, bars and tables as slides.
       </p>
       {msg && <p className="text-xs" style={{ color: '#B5482F' }}>{msg}</p>}
 
